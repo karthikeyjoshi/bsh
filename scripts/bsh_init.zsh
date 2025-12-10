@@ -13,34 +13,62 @@ _bsh_get_branch() {
     git rev-parse --abbrev-ref HEAD 2>/dev/null
 }
 
+# Initialize the variable (0 = show all, 1 = success only)
+_bsh_filter_success=0
+
+_bsh_toggle_success_filter() {
+    # Toggle between 0 and 1
+    if [[ $_bsh_filter_success -eq 0 ]]; then
+        _bsh_filter_success=1
+    else
+        _bsh_filter_success=0
+    fi
+    
+    # Refresh suggestions with the new filter applied
+    _bsh_refresh_suggestions
+    zle redisplay
+}
+
+# Register and bind
+zle -N _bsh_toggle_success_filter
+bindkey '^F' _bsh_toggle_success_filter
+
 # --- SUGGESTION ENGINE ---
 _bsh_refresh_suggestions() {
+    # 1. Validation
     if [[ ! -x "$BSH_BINARY" ]]; then return; fi
-    if [[ -z "$BUFFER" || ${#BUFFER} -lt 1 ]]; then
+    # Don't suggest if buffer is empty or just whitespace
+    if [[ -z "${BUFFER// }" ]]; then
         POSTDISPLAY=""
         return
     fi
 
+    # 2. Prepare Arguments
     local args=("$BUFFER" "--scope")
     local header_text=" BSH: Global "
     
-    if [[ $_bsh_mode -eq 0 ]]; then
-        args+=("global")
-    elif [[ $_bsh_mode -eq 1 ]]; then
+    if [[ $_bsh_mode -eq 1 ]]; then
         args+=("dir" "--cwd" "$PWD")
         header_text=" BSH: Directory "
     elif [[ $_bsh_mode -eq 2 ]]; then
         local branch=$(_bsh_get_branch)
-        if [[ -z "$branch" ]]; then
-            _bsh_mode=0; args+=("global")
-        else
-            args+=("branch" "--branch" "$branch")
-            header_text=" BSH: Branch ($branch) "
-        fi
+        [[ -z "$branch" ]] && branch="unknown"
+        args+=("branch" "--branch" "$branch")
+        header_text=" BSH: Branch ($branch) "
+    else
+        args+=("global")
     fi
 
+    # Add Success Filter if active
+    if [[ $_bsh_filter_success -eq 1 ]]; then
+        args+=("--success")
+        header_text="${header_text% } [OK] "
+    fi
+
+    # 3. Execution & Parsing
+    # We use 'cat' to ensure we don't trip over raw newlines in variables
     local output
-    output=$("$BSH_BINARY" suggest "${args[@]}")
+    output=$("$BSH_BINARY" suggest "${args[@]}" 2>/dev/null)
     
     if [[ -z "$output" ]]; then
         POSTDISPLAY=""
@@ -48,46 +76,61 @@ _bsh_refresh_suggestions() {
         return
     fi
 
-    # Parse Output
+    # 4. Build Lines & Calculate Width
     _bsh_suggestions=()
     local -a display_lines
     local max_len=${#header_text}
     local i=0
     
-    echo "$output" | while read -r line; do
-        [[ -z "$line" ]] && continue
+    # Read output line by line
+    while IFS= read -r line; do
+        # Ignore empty lines
+        [[ -z "${line// }" ]] && continue
+        # Stop after 5 suggestions
         [[ $i -ge 5 ]] && break 
 
         _bsh_suggestions[$i]="$line"
         
+        # Format: " ⌥1: command "
         local display_num=$((i + 1))
         local text=" ⌥$display_num: $line"
         
+        # Calculate visual length (strip ANSI codes if any exist)
+        local clean_text=${text//$'\e'[\[(]*([0-9;])[@-~]/}
+        local text_len=${#clean_text}
+
+        if (( text_len > max_len )); then max_len=$text_len; fi
+        
         display_lines+=("$text")
-        if (( ${#text} > max_len )); then max_len=${#text}; fi
         ((i++))
-    done
+    done <<< "$output"
 
-    # Draw Box
+    # If no valid lines found after parsing
+    if [[ ${#display_lines[@]} -eq 0 ]]; then
+        POSTDISPLAY=""
+        return
+    fi
+
+    # 5. Draw Box (Strict Padding)
     local result=$'\n'
-    local top="╭$header_text"
-    for ((k=${#header_text}; k<max_len+1; k++)); do top+="─"; done
-    top+="╮"
-    result+="$top"
+    
+    # Top Border
+    local top_content="╭$header_text"
+    # Pad with '─' to max_len+1
+    result+="${(r:max_len+1::─:)top_content}╮"
 
+    # Content Lines
     for line in "${display_lines[@]}"; do
         result+=$'\n'
-        local pad=$(( max_len - ${#line} ))
-        local padding=""
-        for ((k=0; k<pad+1; k++)); do padding+=" "; done
-        result+="│$line$padding│"
+        # Pad with ' ' to max_len
+        result+="│${(r:max_len:: :)line}│"
     done
     
+    # Bottom Border
     result+=$'\n'
-    local bot="╰"
-    for ((k=0; k<max_len+1; k++)); do bot+="─"; done
-    bot+="╯"
-    result+="$bot"
+    local bot_content="╰"
+    # Pad with '─' to max_len+1
+    result+="${(r:max_len+1::─:)bot_content}╯"
 
     POSTDISPLAY="$result"
 }
@@ -143,6 +186,8 @@ _bsh_accept_line() {
     zle .accept-line
 }
 zle -N accept-line _bsh_accept_line
+
+
 
 # Shortcut Keys (1-5)
 _bsh_run_idx() {

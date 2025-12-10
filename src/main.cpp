@@ -74,33 +74,42 @@ int main(int argc, char* argv[]) {
     }
 
     else if (mode == "suggest") {
-        // Usage: bsh suggest "query" --scope [global|dir|branch] --cwd "..." --branch "..."
+        // Usage: bsh suggest "query" --scope [global|dir|branch] --cwd "..." --branch "..." --success
         if (argc < 3) return 0;
         
         std::string query = argv[2];
         SearchScope scope = SearchScope::GLOBAL;
         std::string context_val = "";
+        bool success_only = false; 
         
-        // Simple argument parsing
-        for (int i = 3; i < argc - 1; i++) {
+        // Loop starts at 3 to skip [program, mode, query]
+        for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
-            if (arg == "--scope") {
-                std::string s = argv[i+1];
+            
+            if (arg == "--scope" && i + 1 < argc) {
+                std::string s = argv[++i]; // Increment i to consume value
                 if (s == "dir") scope = SearchScope::DIRECTORY;
                 if (s == "branch") scope = SearchScope::BRANCH;
             }
-            else if (arg == "--cwd" && scope == SearchScope::DIRECTORY) {
-                context_val = argv[i+1];
+            else if (arg == "--cwd" && i + 1 < argc) {
+                // Only capture if scope expects it, or capture anyway to be safe
+                if (scope == SearchScope::DIRECTORY) context_val = argv[++i];
+                else i++; // Skip value if not relevant
             }
-            else if (arg == "--branch" && scope == SearchScope::BRANCH) {
-                context_val = argv[i+1];
+            else if (arg == "--branch" && i + 1 < argc) {
+                if (scope == SearchScope::BRANCH) context_val = argv[++i];
+                else i++;
+            }
+            else if (arg == "--success") { 
+                success_only = true; // <--- 2. Capture flag
             }
         }
 
-        auto results = history.search(query, scope, context_val);
+        // <--- 3. Pass success_only to search
+        auto results = history.search(query, scope, context_val, success_only);
         
         for (const auto& r : results) {
-            std::cout << r.cmd << "\n"; // Clean output, just commands
+            std::cout << r.cmd << "\n";
         }
     }
     return 0;

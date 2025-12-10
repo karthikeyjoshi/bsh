@@ -18,10 +18,10 @@ public:
                     const std::string& cwd, const std::string& branch, 
                     int exit_code, int duration, long long timestamp);
 
-    // Updated Search Signature
     std::vector<SearchResult> search(const std::string& query, 
                                      SearchScope scope,
-                                     const std::string& context_val); 
+                                     const std::string& context_val,
+                                     bool only_success = false); 
 
 private:
     std::string db_path_;
