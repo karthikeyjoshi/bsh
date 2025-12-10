@@ -129,3 +129,45 @@ cd bsh
 chmod +x install.sh
 ./install.sh 
 ```
+## 7. Troubleshooting: Removing BSH and Preventing Shell Spam
+
+If you choose to remove the BSH project, simply deleting the repository folder (e.g., `/Users/karthikey/bsh`) will cause your shell to spam error messages (`no such file or directory`) every time you open a new terminal session or execute a command.
+
+This critical issue occurs because the integration lines in your Zsh startup files (`~/.zshrc`) and persistent Zsh hook definitions still attempt to load files that no longer exist.
+
+To fully uninstall BSH and stop these errors, you must perform a manual cleanup of your shell configuration:
+
+### 7.1 Clean up `~/.zshrc`
+
+The first step is to remove the source command that loads the integration script at startup.
+
+1.  Open your Zsh configuration file in a text editor:
+
+    ```bash
+    nano ~/.zshrc
+    ```
+
+2.  Locate and **delete the entire BSH integration block**, which typically looks similar to this:
+
+    ```bash
+    # BSH History Integration (Added by install.sh)
+    source /path/to/your/bsh-repo/scripts/bsh_init.zsh 
+    ```
+
+### 7.2 Clean up Zsh Hooks (If Errors Persist)
+
+If the errors persist after modifying `~/.zshrc`, the Zsh hook functions (like the command logger) are still defined in memory from the last successful source.
+
+1.  **Restart** your terminal first. If the problem continues, run the following commands once in a clean session to explicitly remove the pre-command hook and any associated widgets:
+
+    ```bash
+    # Remove the function from the pre-command hook execution array
+    precmd_functions=( ${precmd_functions[(I)_bsh_precmd]} )
+
+    # Unload any associated widget functions (like the Ctrl+F toggle)
+    unfunction _bsh_toggle_success_filter
+    ```
+
+### 7.3 Apply Changes
+
+After cleaning up `~/.zshrc` and running the hook removal commands, **start a new terminal session** to confirm the errors have been completely eliminated.
