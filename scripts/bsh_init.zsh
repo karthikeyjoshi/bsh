@@ -5,7 +5,8 @@ BSH_BINARY="$HOME/bsh/build/bsh"
 # State Variables
 typeset -gA _bsh_suggestions
 typeset -g _bsh_start_time
-typeset -g _bsh_mode=0  # 0=Global, 1=Directory, 2=Branch
+typeset -g _bsh_current_cmd
+typeset -g _bsh_mode=0        # 0=Global, 1=Directory, 2=Branch
 
 # --- GIT HELPER ---
 _bsh_get_branch() {
@@ -15,13 +16,11 @@ _bsh_get_branch() {
 # --- SUGGESTION ENGINE ---
 _bsh_refresh_suggestions() {
     if [[ ! -x "$BSH_BINARY" ]]; then return; fi
-    # Only run if buffer has content
     if [[ -z "$BUFFER" || ${#BUFFER} -lt 1 ]]; then
         POSTDISPLAY=""
         return
     fi
 
-    # 1. Prepare Arguments
     local args=("$BUFFER" "--scope")
     local header_text=" BSH: Global "
     
@@ -40,7 +39,6 @@ _bsh_refresh_suggestions() {
         fi
     fi
 
-    # 2. Query BSH
     local output
     output=$("$BSH_BINARY" suggest "${args[@]}")
     
@@ -50,7 +48,7 @@ _bsh_refresh_suggestions() {
         return
     fi
 
-    # 3. Parse & Build UI
+    # Parse Output
     _bsh_suggestions=()
     local -a display_lines
     local max_len=${#header_text}
@@ -62,15 +60,15 @@ _bsh_refresh_suggestions() {
 
         _bsh_suggestions[$i]="$line"
         
-        # Display: " ⌥1: command "
-        local text=" ⌥$i: $line"
-        display_lines+=("$text")
+        local display_num=$((i + 1))
+        local text=" ⌥$display_num: $line"
         
+        display_lines+=("$text")
         if (( ${#text} > max_len )); then max_len=${#text}; fi
         ((i++))
     done
 
-    # 4. Render Box
+    # Draw Box
     local result=$'\n'
     local top="╭$header_text"
     for ((k=${#header_text}; k<max_len+1; k++)); do top+="─"; done
@@ -94,53 +92,82 @@ _bsh_refresh_suggestions() {
     POSTDISPLAY="$result"
 }
 
-# --- STATE SWITCHER (Alt + Arrows) ---
-# Supports both Standard and MacOS keycodes
+# --- STATE SWITCHER ---
 _bsh_cycle_mode_fwd() { (( _bsh_mode = (_bsh_mode + 1) % 3 )); _bsh_refresh_suggestions; zle -R; }
 _bsh_cycle_mode_back() { (( _bsh_mode = (_bsh_mode - 1) )); if (( _bsh_mode < 0 )); then _bsh_mode=2; fi; _bsh_refresh_suggestions; zle -R; }
-
 zle -N _bsh_cycle_mode_fwd
 zle -N _bsh_cycle_mode_back
+bindkey "^[f" _bsh_cycle_mode_fwd 
+bindkey "^[[1;3C" _bsh_cycle_mode_fwd 
+bindkey "^[b" _bsh_cycle_mode_back
+bindkey "^[[1;3D" _bsh_cycle_mode_back
 
-bindkey "^[f" _bsh_cycle_mode_fwd       # Standard Alt+Right
-bindkey "^[[1;3C" _bsh_cycle_mode_fwd   # iTerm Alt+Right
-bindkey "^[b" _bsh_cycle_mode_back      # Standard Alt+Left
-bindkey "^[[1;3D" _bsh_cycle_mode_back  # iTerm Alt+Left
+# --- RECORDING HOOKS ---
+_bsh_preexec() {
+    _bsh_current_cmd="$1"
+    zmodload zsh/datetime
+    _bsh_start_time=$EPOCHREALTIME
+}
+_bsh_precmd() {
+    local exit_code=$?
+    if [[ -z "$_bsh_start_time" || -z "$_bsh_current_cmd" ]]; then return; fi
+    local now=$EPOCHREALTIME; local duration=$(( (now - _bsh_start_time) * 1000 ))
+    local cmd_log="$_bsh_current_cmd"
+    _bsh_start_time=""; _bsh_current_cmd=""
+    "$BSH_BINARY" record --cmd "$cmd_log" --cwd "$PWD" --exit "$exit_code" --duration "${duration%.*}" --session "$$"
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _bsh_preexec
+add-zsh-hook precmd _bsh_precmd
 
-# --- STANDARD HOOKS ---
+# --- TYPING HOOKS ---
 _bsh_self_insert() { zle .self-insert; _bsh_refresh_suggestions; }
 zle -N self-insert _bsh_self_insert
-
 _bsh_backward_delete_char() { zle .backward-delete-char; _bsh_refresh_suggestions; }
 zle -N backward-delete-char _bsh_backward_delete_char
 
-# --- EXECUTION BINDINGS (The Fix) ---
+# --- EXECUTION BINDINGS (FIXED) ---
 
+# Standard Enter Key
+_bsh_accept_line() {
+    # DO NOT overwrite BUFFER with the top suggestion.
+    # Just clear the UI and run what the user actually typed.
+    
+    # 1. Clear the box
+    POSTDISPLAY=""
+    
+    # 2. Force Redraw (Wipes ghost text)
+    zle -R 
+    
+    # 3. Execute
+    zle .accept-line
+}
+zle -N accept-line _bsh_accept_line
+
+# Shortcut Keys (1-5)
 _bsh_run_idx() {
-    local i=$1
-    if [[ -n "${_bsh_suggestions[$i]}" ]]; then
-        BUFFER="${_bsh_suggestions[$i]}"
+    local display_num=$1
+    local idx=$((display_num - 1))
+    
+    if [[ -n "${_bsh_suggestions[$idx]}" ]]; then
+        BUFFER="${_bsh_suggestions[$idx]}"
+        
+        # 1. Clear the box
         POSTDISPLAY=""
+        # 2. Force Redraw (The Fix)
+        zle -R 
+        # 3. Execute
         zle .accept-line
     fi
 }
 
-# Create widgets for 0-4
-for i in {0..4}; do
+for i in {1..5}; do
     eval "_bsh_run_$i() { _bsh_run_idx $i; }; zle -N _bsh_run_$i"
 done
 
-# 1. Standard Escape Sequences (Linux / Configured Mac)
-bindkey '^[0' _bsh_run_0
-bindkey '^[1' _bsh_run_1
-bindkey '^[2' _bsh_run_2
-bindkey '^[3' _bsh_run_3
-bindkey '^[4' _bsh_run_4
-
-# 2. MacOS Native Option Key Symbols (The Magic Fix)
-# 0=º, 1=¡, 2=™, 3=£, 4=¢ (Standard US Layout)
-bindkey 'º' _bsh_run_0
-bindkey '¡' _bsh_run_1
-bindkey '™' _bsh_run_2
-bindkey '£' _bsh_run_3
-bindkey '¢' _bsh_run_4
+# Bindings
+bindkey '^[1' _bsh_run_1; bindkey '¡' _bsh_run_1
+bindkey '^[2' _bsh_run_2; bindkey '™' _bsh_run_2
+bindkey '^[3' _bsh_run_3; bindkey '£' _bsh_run_3
+bindkey '^[4' _bsh_run_4; bindkey '¢' _bsh_run_4
+bindkey '^[5' _bsh_run_5; bindkey '∞' _bsh_run_5

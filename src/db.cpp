@@ -34,7 +34,7 @@ void HistoryDB::initSchema() {
 // Logic to insert command and link it to execution
 void HistoryDB::logCommand(const std::string& cmd, const std::string& session, 
                            const std::string& cwd, const std::string& branch, 
-                           int exit_code, int duration, long long timestamp) { // Added timestamp here
+                           int exit_code, int duration, long long timestamp) {
     try {
         SQLite::Database db(db_path_, SQLite::OPEN_READWRITE);
         
@@ -49,7 +49,7 @@ void HistoryDB::logCommand(const std::string& cmd, const std::string& session,
         idQuery.executeStep();
         int cmd_id = idQuery.getColumn(0);
 
-        // 3. Log execution (using the passed timestamp)
+        // 3. Log execution
         SQLite::Statement logQuery(db, "INSERT INTO executions "
             "(command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -57,10 +57,17 @@ void HistoryDB::logCommand(const std::string& cmd, const std::string& session,
         logQuery.bind(1, cmd_id);
         logQuery.bind(2, session);
         logQuery.bind(3, cwd);
-        logQuery.bind(4, branch);
+        
+        if (branch.empty()) {
+            logQuery.bind(4, (char*)nullptr); // Explicitly bind NULL
+        } else {
+            logQuery.bind(4, branch);
+        }
+        // ---------------------------------------------
+
         logQuery.bind(5, exit_code);
         logQuery.bind(6, duration);
-        logQuery.bind(7, timestamp); // Bind the argument
+        logQuery.bind(7, timestamp);
         logQuery.exec();
 
     } catch (std::exception& e) {

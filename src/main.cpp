@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
         // If cwd is not provided, use current process path
         if (cwd.empty()) cwd = fs::current_path().string();
         
-        std::string branch = "HEAD"; // Default if not in repo
+        std::string branch = ""; // Default if not in repo
         auto detected_branch = get_git_branch(cwd);
         if (detected_branch) {
             branch = *detected_branch;
