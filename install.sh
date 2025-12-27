@@ -2,6 +2,7 @@
 
 # --- Configuration ---
 BINARY_NAME="bsh"
+DAEMON_NAME="bsh-daemon"
 INSTALL_DIR="$HOME/.bsh"
 BIN_PATH="$INSTALL_DIR/bin"
 ZSH_INIT_FILE="scripts/bsh_init.zsh"
@@ -14,7 +15,6 @@ mkdir -p "$INSTALL_DIR/scripts"
 
 # --- 2. Build the C++ Binary ---
 echo "Building C++ binary..."
-# Assuming you run this script from the project root (where CMakeLists.txt is)
 if ! command -v cmake &> /dev/null; then
     echo "Error: CMake is required but not found. Please install CMake."
     exit 1
@@ -24,6 +24,8 @@ fi
 rm -rf build
 cmake -B build -G Ninja
 cmake --build build --target "$BINARY_NAME"
+# FIX: Build the daemon target explicitly as well
+cmake --build build --target "$DAEMON_NAME"
 
 if [[ $? -ne 0 ]]; then
     echo "Error: C++ compilation failed. Aborting."
@@ -31,10 +33,11 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # --- 3. Install Components ---
-echo "Installing binary and scripts..."
+echo "Installing binaries and scripts..."
 
-# Move the compiled binary
+# FIX: Copy BOTH binaries
 cp "build/$BINARY_NAME" "$BIN_PATH/$BINARY_NAME"
+cp "build/$DAEMON_NAME" "$BIN_PATH/$DAEMON_NAME"
 
 # Copy the Zsh hook script
 cp "$ZSH_INIT_FILE" "$INSTALL_DIR/scripts/"
@@ -42,7 +45,7 @@ cp "$ZSH_INIT_FILE" "$INSTALL_DIR/scripts/"
 # --- 4. Update Zsh Configuration ---
 echo "Updating $ZSHRC_PATH..."
 
-INIT_LINE="source $PWD/$ZSH_INIT_FILE"
+INIT_LINE="source $INSTALL_DIR/scripts/bsh_init.zsh"
 
 if ! grep -q "$INIT_LINE" "$ZSHRC_PATH"; then
     echo "\n# BSH History Integration (Added by install.sh)" >> "$ZSHRC_PATH"

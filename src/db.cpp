@@ -1,19 +1,23 @@
 #include "db.hpp"
 #include <iostream>
+#include <algorithm> 
 
-// Constructor now opens the DB immediately
+// --- Helper: Trim String ---
+std::string trim_cmd(const std::string& str) {
+    auto start = str.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    auto end = str.find_last_not_of(" \t\n\r");
+    return str.substr(start, end - start + 1);
+}
+
 HistoryDB::HistoryDB(const std::string& db_path) : db_path_(db_path) {
-    // Open DB in Read/Write mode with Create flag
     db_ = std::make_unique<SQLite::Database>(db_path_, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
-    
-    // Performance Pragma
     db_->exec("PRAGMA journal_mode=WAL;");
     db_->exec("PRAGMA synchronous=NORMAL;");
 }
 
 void HistoryDB::initSchema() {
     try {
-        // Use the persistent connection
         db_->exec("CREATE TABLE IF NOT EXISTS commands ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "cmd_text TEXT UNIQUE NOT NULL"
@@ -33,10 +37,8 @@ void HistoryDB::initSchema() {
 
         db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_cwd ON executions(cwd);");
         db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_branch ON executions(git_branch);");
-        db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_exit ON executions(exit_code);");
         db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_ts ON executions(timestamp);");
 
-        // --- PREPARE STATEMENTS ONCE ---
         stmt_insert_cmd_ = std::make_unique<SQLite::Statement>(*db_, 
             "INSERT OR IGNORE INTO commands (cmd_text) VALUES (?)");
             
@@ -51,28 +53,31 @@ void HistoryDB::initSchema() {
     }
 }
 
-void HistoryDB::logCommand(const std::string& cmd, const std::string& session, 
+void HistoryDB::logCommand(const std::string& raw_cmd, const std::string& session, 
                            const std::string& cwd, const std::string& branch, 
                            int exit_code, int duration, long long timestamp) {
+    
+    std::string cmd = trim_cmd(raw_cmd);
+    if (cmd.empty()) return; 
+
     try {
-        // 1. Insert Command
-        stmt_insert_cmd_->reset(); // Reset state from previous run
+        stmt_insert_cmd_->reset();
         stmt_insert_cmd_->bind(1, cmd);
         stmt_insert_cmd_->exec();
 
-        // 2. Get ID
         stmt_get_id_->reset();
         stmt_get_id_->bind(1, cmd);
         if (stmt_get_id_->executeStep()) {
             int cmd_id = stmt_get_id_->getColumn(0);
 
-            // 3. Log Execution
             stmt_insert_exec_->reset();
             stmt_insert_exec_->bind(1, cmd_id);
             stmt_insert_exec_->bind(2, session);
             stmt_insert_exec_->bind(3, cwd);
+            
             if (branch.empty()) stmt_insert_exec_->bind(4, (char*)nullptr);
             else stmt_insert_exec_->bind(4, branch);
+            
             stmt_insert_exec_->bind(5, exit_code);
             stmt_insert_exec_->bind(6, duration);
             stmt_insert_exec_->bind(7, (int64_t)timestamp);
@@ -89,28 +94,42 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                                             bool only_success) {
     std::vector<SearchResult> results;
     try {
-        // Note: Dynamic queries are harder to pre-compile because the WHERE clause changes.
-        // However, since the DB connection (db_) is already open, this is still FAST.
-        
-        std::string sql = "SELECT c.id, c.cmd_text "
+        // FIX: GROUP BY TRIM(...) forces duplicates like "cd" and "cd " to merge.
+        std::string sql = "SELECT MAX(c.id), TRIM(c.cmd_text) "
                           "FROM executions e "
                           "JOIN commands c ON e.command_id = c.id "
-                          "WHERE c.cmd_text LIKE ? "
+                          "WHERE TRIM(c.cmd_text) LIKE ? "
                           "AND c.cmd_text NOT LIKE 'bsh%' "
                           "AND c.cmd_text NOT LIKE './bsh%' "
                           "AND TRIM(c.cmd_text) NOT LIKE '#%' ";
 
-        if (scope == SearchScope::DIRECTORY) sql += " AND e.cwd = ?";
-        else if (scope == SearchScope::BRANCH) sql += " AND e.git_branch = ?";
+        if (scope == SearchScope::DIRECTORY) {
+            sql += " AND e.cwd = ?";
+        }
+        else if (scope == SearchScope::BRANCH) {
+            if (context_val.empty() || context_val == "unknown") {
+                sql += " AND (e.git_branch IS NULL OR e.git_branch = '')";
+            } else {
+                sql += " AND e.git_branch = ?";
+            }
+        }
         
         if (only_success) sql += " AND e.exit_code = 0";
 
-        sql += " GROUP BY c.cmd_text ORDER BY MAX(e.timestamp) DESC LIMIT 5";
+        sql += " GROUP BY TRIM(c.cmd_text) ORDER BY MAX(e.timestamp) DESC LIMIT 5";
 
-        SQLite::Statement query_stmt(*db_, sql); // Use existing DB connection
+        SQLite::Statement query_stmt(*db_, sql);
 
         query_stmt.bind(1, "%" + query + "%");
-        if (scope != SearchScope::GLOBAL) query_stmt.bind(2, context_val);
+        
+        if (scope == SearchScope::DIRECTORY) {
+            query_stmt.bind(2, context_val);
+        }
+        else if (scope == SearchScope::BRANCH) {
+            if (!context_val.empty() && context_val != "unknown") {
+                query_stmt.bind(2, context_val);
+            }
+        }
 
         while (query_stmt.executeStep()) {
             results.push_back({

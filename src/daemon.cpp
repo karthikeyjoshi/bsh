@@ -29,7 +29,7 @@ std::vector<std::string> split_msg(const std::string& msg) {
 void daemonize() {
     pid_t pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
-    if (pid > 0) exit(EXIT_SUCCESS); // Parent dies
+    if (pid > 0) exit(EXIT_SUCCESS);
 
     if (setsid() < 0) exit(EXIT_FAILURE);
 
@@ -43,7 +43,6 @@ void daemonize() {
     umask(0);
     chdir("/");
     
-    // Close standard FDs to detach completely
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
@@ -57,18 +56,15 @@ std::string get_db_path() {
 }
 
 int main(int argc, char* argv[]) {
-    // 1. Become a background process
     daemonize();
 
-    // 2. Initialize Resources (Done ONCE)
     HistoryDB history(get_db_path());
     history.initSchema();
 
-    // 3. Setup Socket
     int server_fd;
     struct sockaddr_un address;
     
-    unlink(SOCKET_PATH.c_str()); // Remove old socket if exists
+    unlink(SOCKET_PATH.c_str());
 
     if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == 0) exit(EXIT_FAILURE);
 
@@ -78,7 +74,6 @@ int main(int argc, char* argv[]) {
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) exit(EXIT_FAILURE);
     if (listen(server_fd, 10) < 0) exit(EXIT_FAILURE);
 
-    // 4. Event Loop
     while (true) {
         int new_socket;
         if ((new_socket = accept(server_fd, nullptr, nullptr)) < 0) continue;
@@ -95,51 +90,60 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        std::string command = args[0];
+        try {
+            std::string command = args[0];
 
-        // --- HANDLER: SUGGEST ---
-        // Protocol: SUGGEST | query | scope | context_val | success_only
-        if (command == "SUGGEST" && args.size() >= 5) {
-            std::string query = args[1];
-            std::string scope_str = args[2];
-            std::string ctx_val = args[3];
-            bool success = (args[4] == "1");
+            // --- HANDLER: SUGGEST ---
+            if (command == "SUGGEST" && args.size() >= 5) {
+                std::string query = args[1];
+                std::string scope_str = args[2];
+                std::string ctx_val = args[3];
+                bool success = (args[4] == "1");
 
-            SearchScope scope = SearchScope::GLOBAL;
-            if (scope_str == "dir") scope = SearchScope::DIRECTORY;
-            
-            // Branch Logic:
-            // The Client sends the CWD, the Daemon (Server) figures out the branch.
-            // This keeps libgit2 OUT of the client binary.
-            if (scope_str == "branch") {
-                scope = SearchScope::BRANCH;
-                // If client sent CWD as context, resolve branch here
-                auto branch_opt = get_git_branch(ctx_val); 
-                ctx_val = branch_opt.value_or("unknown");
+                SearchScope scope = SearchScope::GLOBAL;
+                if (scope_str == "dir") scope = SearchScope::DIRECTORY;
+                
+                if (scope_str == "branch") {
+                    scope = SearchScope::BRANCH;
+                    
+                    // --- FIX START ---
+                    // The Client (via Zsh) has ALREADY resolved the branch name.
+                    // ctx_val contains "main", "feature/login", or "unknown".
+                    
+                    // We DO NOT call get_git_branch(ctx_val) here, because ctx_val 
+                    // is a name, not a directory path.
+                    
+                    // Normalize "unknown" to empty string for the DB query
+                    if (ctx_val == "unknown") {
+                        ctx_val = "";
+                    }
+                    // --- FIX END ---
+                }
+
+                auto results = history.search(query, scope, ctx_val, success);
+                for (const auto& r : results) {
+                    response += r.cmd + "\n";
+                }
             }
 
-            auto results = history.search(query, scope, ctx_val, success);
-            for (const auto& r : results) {
-                response += r.cmd + "\n";
+            // --- HANDLER: RECORD ---
+            else if (command == "RECORD" && args.size() >= 6) {
+                std::string cmd = args[1];
+                std::string sess = args[2];
+                std::string cwd = args[3];
+                int exit_code = (args[4].empty()) ? 0 : std::stoi(args[4]);
+                int duration = (args[5].empty()) ? 0 : std::stoi(args[5]);
+                
+                // For RECORD, we DO need to resolve the branch from the CWD
+                std::string branch = "";
+                auto branch_opt = get_git_branch(cwd);
+                if (branch_opt) branch = *branch_opt;
+
+                history.logCommand(cmd, sess, cwd, branch, exit_code, duration, time(nullptr));
+                response = "OK";
             }
-        }
-
-        // --- HANDLER: RECORD ---
-        // Protocol: RECORD | cmd | session | cwd | exit | duration
-        else if (command == "RECORD" && args.size() >= 6) {
-            std::string cmd = args[1];
-            std::string sess = args[2];
-            std::string cwd = args[3];
-            int exit_code = std::stoi(args[4]);
-            int duration = std::stoi(args[5]);
-            
-            // Resolve branch here in the background
-            std::string branch = "";
-            auto branch_opt = get_git_branch(cwd);
-            if (branch_opt) branch = *branch_opt;
-
-            history.logCommand(cmd, sess, cwd, branch, exit_code, duration, time(nullptr));
-            response = "OK";
+        } catch (const std::exception& e) {
+            response = "ERR";
         }
 
         send(new_socket, response.c_str(), response.size(), 0);
