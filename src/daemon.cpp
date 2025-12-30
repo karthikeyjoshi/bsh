@@ -135,11 +135,11 @@ int main(int argc, char* argv[]) {
                 }
             }
             else if (command == "RECORD" && args.size() >= 6) {
-                std::string cmd = args[1];
-                std::string sess = args[2];
-                std::string cwd = args[3];
-                int exit_code = (args[4].empty()) ? 0 : std::stoi(args[4]);
-                int duration = (args[5].empty()) ? 0 : std::stoi(args[5]);
+                std::string cmd (args[1]);
+                std::string sess (args[2]);
+                std::string cwd (args[3]);
+                int exit_code = args[4].empty() ? 0 : std::stoi(std::string(args[4]));
+                int duration = args[5].empty() ? 0 : std::stoi(std::string(args[5]));
                 
                 std::string branch = "";
                 auto branch_opt = get_git_branch(cwd);
