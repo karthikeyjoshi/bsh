@@ -1,7 +1,7 @@
 #include "db.hpp"
 #include "git_utils.hpp"
 #include "ipc.hpp"
-
+#include <string_view>
 #include <iostream>
 #include <vector>
 #include <sstream>
@@ -15,12 +15,17 @@
 namespace fs = std::filesystem;
 
 // --- Helper: Parsing ---
-std::vector<std::string> split_msg(const std::string& msg) {
-    std::vector<std::string> parts;
-    std::stringstream ss(msg);
-    std::string item;
-    while (std::getline(ss, item, DELIMITER)) {
-        parts.push_back(item);
+std::vector<std::string_view> split_msg(std::string_view msg) {
+    std::vector<std::string_view> parts;
+    size_t start = 0;
+    while (true){
+        size_t pos = msg.find(DELIMITER, start);
+        if(pos == std::string_view::npos) {
+            parts.emplace_back(msg.substr(start));
+            break;
+        }
+        parts.emplace_back(msg.substr(start, pos - start));
+        start = pos + 1;
     }
     return parts;
 }
@@ -78,10 +83,14 @@ int main(int argc, char* argv[]) {
         int new_socket;
         if ((new_socket = accept(server_fd, nullptr, nullptr)) < 0) continue;
 
-        char buffer[BUFFER_SIZE] = {0};
-        read(new_socket, buffer, BUFFER_SIZE);
-        
-        std::string request(buffer);
+        char buffer[BUFFER_SIZE + 1];
+        ssize_t bytes = read(new_socket, buffer, BUFFER_SIZE);
+        if (bytes <= 0) {
+            close(new_socket);
+            continue;
+        }
+        buffer[bytes] = '\0';
+        std::string_view request(buffer, bytes);
         auto args = split_msg(request);
         std::string response = "";
 
@@ -91,12 +100,12 @@ int main(int argc, char* argv[]) {
         }
 
         try {
-            std::string command = args[0];
+            std::string_view command = args[0];
 
             if (command == "SUGGEST" && args.size() >= 5) {
-                std::string query = args[1];
-                std::string scope_str = args[2];
-                std::string ctx_val = args[3];
+                std::string query (args[1]);
+                std::string scope_str (args[2]);
+                std::string ctx_val (args[3]);
                 bool success = (args[4] == "1");
 
                 SearchScope scope = SearchScope::GLOBAL;
