@@ -45,7 +45,7 @@ void daemonize() {
     if (pid < 0) exit(EXIT_FAILURE);
     if (pid > 0) exit(EXIT_SUCCESS);
 
-    umask(0);
+    umask(0077);
     chdir("/");
     
     close(STDIN_FILENO);
@@ -69,14 +69,16 @@ int main(int argc, char* argv[]) {
     int server_fd;
     struct sockaddr_un address;
     
-    unlink(SOCKET_PATH.c_str());
+    std::string socket_path = get_socket_path();
+    unlink(socket_path.c_str());
 
     if ((server_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == 0) exit(EXIT_FAILURE);
 
     address.sun_family = AF_UNIX;
-    strncpy(address.sun_path, SOCKET_PATH.c_str(), sizeof(address.sun_path) - 1);
+    strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
 
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) exit(EXIT_FAILURE);
+    chmod(socket_path.c_str(), 0600);
     if (listen(server_fd, 10) < 0) exit(EXIT_FAILURE);
 
     while (true) {

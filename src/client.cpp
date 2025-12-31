@@ -63,7 +63,8 @@ int main(int argc, char* argv[]) {
     }
 
     serv_addr.sun_family = AF_UNIX;
-    strncpy(serv_addr.sun_path, SOCKET_PATH.c_str(), sizeof(serv_addr.sun_path) - 1);
+    std::string socket_path = get_socket_path();
+    strncpy(serv_addr.sun_path, socket_path.c_str(), sizeof(serv_addr.sun_path) - 1);
 
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         return 1;
