@@ -18,26 +18,48 @@ HistoryDB::HistoryDB(const std::string& db_path) : db_path_(db_path) {
 
 void HistoryDB::initSchema() {
     try {
-        db_->exec("CREATE TABLE IF NOT EXISTS commands ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "cmd_text TEXT UNIQUE NOT NULL"
-                ");");
+        // get current version of system
+        int current_version = db_->execAndGet("PRAGMA user_version").getInt();
 
-        db_->exec("CREATE TABLE IF NOT EXISTS executions ("
-                "id INTEGER PRIMARY KEY, "
-                "command_id INTEGER, "
-                "session_id TEXT, "
-                "cwd TEXT, "
-                "git_branch TEXT, "
-                "exit_code INTEGER, "
-                "duration_ms INTEGER, "
-                "timestamp INTEGER, "
-                "FOREIGN KEY (command_id) REFERENCES commands (id)"
-                ");");
+        // set target version of system
+        const int TARGET_VERSION = 1;
 
-        db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_cwd ON executions(cwd);");
-        db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_branch ON executions(git_branch);");
-        db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_ts ON executions(timestamp);");
+        // migrating one step at a time
+        while (current_version < TARGET_VERSION) {
+            SQLite::Transaction transaction(*db_);
+            
+            if (current_version == 0) {
+                // base schema
+                db_->exec("CREATE TABLE IF NOT EXISTS commands ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        "cmd_text TEXT UNIQUE NOT NULL"
+                        ");");
+
+                db_->exec("CREATE TABLE IF NOT EXISTS executions ("
+                        "id INTEGER PRIMARY KEY, "
+                        "command_id INTEGER, "
+                        "session_id TEXT, "
+                        "cwd TEXT, "
+                        "git_branch TEXT, "
+                        "exit_code INTEGER, "
+                        "duration_ms INTEGER, "
+                        "timestamp INTEGER, "
+                        "FOREIGN KEY (command_id) REFERENCES commands (id)"
+                        ");");
+
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_cwd ON executions(cwd);");
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_branch ON executions(git_branch);");
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_ts ON executions(timestamp);");
+
+                current_version = 1;
+                db_->exec("PRAGMA user_version = 1");
+            } else {
+                std::cerr << "NO Migration logic for v" << current_version << "->v" << (current_version+1) << std::endl;
+                break;
+            }
+
+            transaction.commit();
+        }
 
         stmt_insert_cmd_ = std::make_unique<SQLite::Statement>(*db_, 
             "INSERT OR IGNORE INTO commands (cmd_text) VALUES (?)");

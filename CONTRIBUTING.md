@@ -70,14 +70,71 @@ When modifying `scripts/bsh_init.zsh`:
 
 ### 3. Database Schema Changes
 
-If modifying `src/db.cpp` or the table schema:
+BSH uses **SQLite schema versioning** via `PRAGMA user_version` to manage database evolution safely.
 
-* There is currently no migration system.
-* You must delete the local database to allow the daemon to recreate it with the new schema:
+All schema migrations are applied **at daemon startup**, before the daemon begins serving client requests.
 
-    ```bash
-    rm ~/.local/share/bsh/history.db
-    ```
+#### Adding or Modifying Schema Versions
+
+1. Update the target schema version in `HistoryDB::initSchema()`.
+2. Add a new migration step in the version loop (e.g. `v1 → v2`, `v2 → v3`).
+3. Each migration step **must** be executed inside a transaction.
+
+#### Destructive Schema Changes (Example)
+
+For schema changes that SQLite cannot perform using `ALTER TABLE`
+(e.g. dropping columns or changing column types), use the standard
+**create → copy → drop → rename** migration pattern.
+
+Below is an example migration (`v1 → v2`) implemented using the
+same C++/SQLiteCpp style as the codebase:
+
+```cpp
+else if (current_version == 1) {
+    // v1 → v2 : example destructive migration
+
+    // 1. Create new table with updated schema
+    db_->exec(
+        "CREATE TABLE executions_new ("
+        "id INTEGER PRIMARY KEY, "
+        "command_id INTEGER, "
+        "session_id TEXT, "
+        "cwd TEXT, "
+        "git_branch TEXT, "
+        "exit_code INTEGER, "
+        "duration_ms INTEGER, "
+        "timestamp INTEGER, "
+        "new_column TEXT, "         // <-- new column
+        "FOREIGN KEY (command_id) REFERENCES commands (id)"
+        ");"
+    );
+
+    // 2. Copy data from old table
+    // put either 'NULL' or a default value into new column for old data
+    db_->exec("INSERT INTO executions_new ("
+                "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, new_column) "
+                "SELECT "
+                "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, 'migrated_data' "      // mark empty values as text 'migrated_data'
+                "FROM executions; "
+            );
+
+    // 3. Swap Tables: Drop the old one, rename the new one
+    // eg. drop table executions and rename execution_new to execution
+    db_->exec("DROP TABLE executions;");
+    db_->exec("ALTER TABLE executions_new RENAME TO executions;");
+
+    // 4. Recreate indexes
+    db_->exec("CREATE INDEX idx_exec_cwd ON executions(cwd);");
+    db_->exec("CREATE INDEX idx_exec_branch ON executions(git_branch);");
+    db_->exec("CREATE INDEX idx_exec_ts ON executions(timestamp);");
+
+    // 5. Increment schema version
+    current_version = 2;
+    db_->exec("PRAGMA user_version = 2");
+
+}
+```
+
 
 ---
 
