@@ -59,40 +59,40 @@ void HistoryDB::initSchema() {
             else if (current_version == 1) {
                 // v1 to v2 : migration
                 // adding new column
-                // new table with extra column.
-                db_->exec("CREATE TABLE executions_new ("
-                        "id INTEGER PRIMARY KEY, "
-                        "command_id INTEGER, "
-                        "session_id TEXT, "
-                        "cwd TEXT, "
-                        "git_branch TEXT, "
-                        "exit_code INTEGER, "
-                        "duration_ms INTEGER, "
-                        "timestamp INTEGER, "
-                        "test_column TEXT, "       // ** new column
-                        "FOREIGN KEY (command_id) REFERENCES commands (id)"
-                        ");");
+                // 1. new table with extra columns.
+                // db_->exec("CREATE TABLE executions_new ("
+                //         "id INTEGER PRIMARY KEY, "
+                //         "command_id INTEGER, "
+                //         "session_id TEXT, "
+                //         "cwd TEXT, "
+                //         "git_branch TEXT, "
+                //         "exit_code INTEGER, "
+                //         "duration_ms INTEGER, "
+                //         "timestamp INTEGER, "
+                //         "test_column TEXT, "       // ** new column
+                //         "FOREIGN KEY (command_id) REFERENCES commands (id)"
+                //         ");");
                 
-                // transfer data from old to new version of schema
+                // 2. transfer data from old to new version of schema
                 // we can put either 'NULL' or a default value into new column for old data
-                db_->exec("INSERT INTO executions_new ("
-                    "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, test_column) "
-                    "SELECT "
-                    "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, 'migrated_data' "      // mark empty values as text 'migrated_data'
-                    "FROM executions; "
-                );
+                // db_->exec("INSERT INTO executions_new ("
+                //     "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, test_column) "
+                //     "SELECT "
+                //     "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, 'migrated_data' "      // mark empty values as text 'migrated_data'
+                //     "FROM executions; "
+                // );
 
-                // drop table executions and rename execution_new to execution
-                db_->exec("DROP TABLE executions;");
-                db_->exec("ALTER TABLE executions_new RENAME TO executions;");
+                // 3. drop table executions and rename execution_new to executions
+                // db_->exec("DROP TABLE executions;");
+                // db_->exec("ALTER TABLE executions_new RENAME TO executions;");
 
-                // re-create index
-                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_cwd ON executions(cwd);");
-                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_branch ON executions(git_branch);");
-                db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_ts ON executions(timestamp);");
+                // 4. re-create index
+                // db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_cwd ON executions(cwd);");
+                // db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_branch ON executions(git_branch);");
+                // db_->exec("CREATE INDEX IF NOT EXISTS idx_exec_ts ON executions(timestamp);");
 
-                current_version = 2;
-                db_->exec("PRAGMA user_version = 2");
+                // current_version = 2;
+                // db_->exec("PRAGMA user_version = 2");
 
             } else {
                 std::cerr << "NO Migration logic for v" << current_version << "->v" << (current_version+1) << std::endl;
