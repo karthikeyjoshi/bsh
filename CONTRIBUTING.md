@@ -68,19 +68,19 @@ When modifying `scripts/bsh_init.zsh`:
 1. Execute `source scripts/bsh_init.zsh` in the current shell to reload function definitions.
 2. Type in the terminal to trigger the `_bsh_refresh_suggestions` hook.
 
-## 3. Database Schema Changes
+### 3. Database Schema Changes
 
 BSH uses **SQLite schema versioning** via `PRAGMA user_version` to manage database evolution safely.
 
 All schema migrations are applied **at daemon startup**, before the daemon begins serving client requests.
 
-### Adding or Modifying Schema Versions
+#### Adding or Modifying Schema Versions
 
 1. Update the target schema version in `HistoryDB::initSchema()`.
 2. Add a new migration step in the version loop (e.g. `v1 → v2`, `v2 → v3`).
 3. Each migration step **must** be executed inside a transaction.
 
-### Destructive Schema Changes (Example)
+#### Destructive Schema Changes (Example)
 
 For schema changes that SQLite cannot perform using `ALTER TABLE`
 (e.g. dropping columns or changing column types), use the standard
@@ -92,7 +92,6 @@ same C++/SQLiteCpp style as the codebase:
 ```cpp
 else if (current_version == 1) {
     // v1 → v2 : example destructive migration
-    SQLite::Transaction transaction(*db_);
 
     // 1. Create new table with updated schema
     db_->exec(
@@ -113,7 +112,7 @@ else if (current_version == 1) {
     // 2. Copy data from old table
     // put either 'NULL' or a default value into new column for old data
     db_->exec("INSERT INTO executions_new ("
-                "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, test_column) "
+                "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, new_column) "
                 "SELECT "
                 "id, command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp, 'migrated_data' "      // mark empty values as text 'migrated_data'
                 "FROM executions; "
@@ -130,9 +129,9 @@ else if (current_version == 1) {
     db_->exec("CREATE INDEX idx_exec_ts ON executions(timestamp);");
 
     // 5. Increment schema version
+    current_version = 2;
     db_->exec("PRAGMA user_version = 2");
 
-    transaction.commit();
 }
 ```
 
