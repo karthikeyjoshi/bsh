@@ -210,7 +210,6 @@ _bsh_run_idx() {
     fi
 }
 
-# new features
 _bsh_insert_idx() {
   local idx=$(($1 - 1))
   if [[ -n "${_bsh_suggestions[$idx]}" ]]; then
@@ -220,6 +219,7 @@ _bsh_insert_idx() {
     zle -R                             
   fi
 }
+
 for i in {1..5}; do 
   eval "_bsh_insert_$i() { _bsh_insert_idx $i; }; zle -N _bsh_insert_$i"
 done
@@ -230,8 +230,17 @@ bindkey '^[2' _bsh_run_2; bindkey '™' _bsh_run_2
 bindkey '^[3' _bsh_run_3; bindkey '£' _bsh_run_3
 bindkey '^[4' _bsh_run_4; bindkey '¢' _bsh_run_4
 bindkey '^[5' _bsh_run_5; bindkey '∞' _bsh_run_5
+
+# Standard Linux/raw bindings (Alt + Shift + 1-5)
 bindkey "^[!" _bsh_insert_1
 bindkey "^[@" _bsh_insert_2
 bindkey "^[#" _bsh_insert_3
 bindkey "^[$" _bsh_insert_4
 bindkey "^[%" _bsh_insert_5
+
+# macOS specific bindings (Option + Shift + 1-5)
+bindkey '⁄' _bsh_insert_1  
+bindkey '€' _bsh_insert_2
+bindkey '‹' _bsh_insert_3
+bindkey '›' _bsh_insert_4
+bindkey 'ﬁ' _bsh_insert_5
