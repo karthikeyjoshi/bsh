@@ -10,6 +10,15 @@ std::string trim_cmd(const std::string& str) {
     return str.substr(start, end - start + 1);
 }
 
+// Helper: Sanitize for FTS5
+// Prevents syntax errors if user types " OR " or special FTS chars
+std::string sanitize_fts_query(std::string query) {
+    // Basic sanitization: remove double quotes to prevent syntax breakage
+    std::replace(query.begin(), query.end(), '"', ' ');
+    // We treat the query as a prefix search
+    return "\"" + query + "\" *";
+}
+
 HistoryDB::HistoryDB(const std::string& db_path) : db_path_(db_path) {
     db_ = std::make_unique<SQLite::Database>(db_path_, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
     db_->exec("PRAGMA journal_mode=WAL;");
@@ -22,7 +31,7 @@ void HistoryDB::initSchema() {
         int current_version = db_->execAndGet("PRAGMA user_version").getInt();
 
         // set target version of system
-        const int TARGET_VERSION = 1;
+        const int TARGET_VERSION = 2;
 
         // migrating one step at a time
         while (current_version < TARGET_VERSION) {
@@ -53,7 +62,28 @@ void HistoryDB::initSchema() {
 
                 current_version = 1;
                 db_->exec("PRAGMA user_version = 1");
-            } else {
+            }
+
+            else if (current_version == 1) {
+                // v1 -> v2: Enable FTS5
+                
+                // 1. Create Virtual Table (External Content to save space)
+                // content='commands' means it reads data from the existing table
+                db_->exec("CREATE VIRTUAL TABLE IF NOT EXISTS commands_fts USING fts5(cmd_text, content='commands', content_rowid='id');");
+
+                // 2. Create Trigger to keep FTS index in sync with main table
+                db_->exec("CREATE TRIGGER IF NOT EXISTS commands_ai AFTER INSERT ON commands BEGIN "
+                          "  INSERT INTO commands_fts(rowid, cmd_text) VALUES (new.id, new.cmd_text); "
+                          "END;");
+
+                // 3. Populate FTS with existing data
+                db_->exec("INSERT INTO commands_fts(commands_fts) VALUES('rebuild');");
+
+                current_version = 2;
+                db_->exec("PRAGMA user_version = 2");
+            }
+
+            else {
                 std::cerr << "NO Migration logic for v" << current_version << "->v" << (current_version+1) << std::endl;
                 break;
             }
@@ -116,14 +146,15 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                                             bool only_success) {
     std::vector<SearchResult> results;
     try {
-        // FIX: GROUP BY TRIM(...) forces duplicates like "cd" and "cd " to merge.
-        std::string sql = "SELECT MAX(c.id), TRIM(c.cmd_text) "
-                          "FROM executions e "
-                          "JOIN commands c ON e.command_id = c.id "
-                          "WHERE TRIM(c.cmd_text) LIKE ? "
+        // FIX: Updated Query for FTS5
+        // We join commands_fts to use the index, then join executions for context.
+        std::string sql = "SELECT MAX(c.id), c.cmd_text "
+                          "FROM commands_fts fts "
+                          "JOIN commands c ON fts.rowid = c.id "
+                          "JOIN executions e ON e.command_id = c.id "
+                          "WHERE commands_fts MATCH ? "
                           "AND c.cmd_text NOT LIKE 'bsh%' "
-                          "AND c.cmd_text NOT LIKE './bsh%' "
-                          "AND TRIM(c.cmd_text) NOT LIKE '#%' ";
+                          "AND c.cmd_text NOT LIKE './bsh%' ";
 
         if (scope == SearchScope::DIRECTORY) {
             sql += " AND e.cwd = ?";
@@ -138,18 +169,19 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
         
         if (only_success) sql += " AND e.exit_code = 0";
 
-        sql += " GROUP BY TRIM(c.cmd_text) ORDER BY MAX(e.timestamp) DESC LIMIT 5";
+        sql += "GROUP BY c.id ORDER BY MAX(e.timestamp) DESC LIMIT 5";
 
         SQLite::Statement query_stmt(*db_, sql);
 
-        query_stmt.bind(1, "%" + query + "%");
+        query_stmt.bind(1, sanitize_fts_query(query));
         
+        int bind_idx = 2;
         if (scope == SearchScope::DIRECTORY) {
-            query_stmt.bind(2, context_val);
+            query_stmt.bind(bind_idx, context_val);
         }
         else if (scope == SearchScope::BRANCH) {
             if (!context_val.empty() && context_val != "unknown") {
-                query_stmt.bind(2, context_val);
+                query_stmt.bind(bind_idx, context_val);
             }
         }
 

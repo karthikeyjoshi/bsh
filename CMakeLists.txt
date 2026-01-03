@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Dependencies (For Daemon Only) ---
 set(SQLITECPP_INTERNAL_SQLITE ON CACHE BOOL "" FORCE)
+add_compile_definitions(SQLITE_ENABLE_FTS5)
+
 include(FetchContent)
 FetchContent_Declare(SQLiteCpp GIT_REPOSITORY https://github.com/SRombauts/SQLiteCpp.git GIT_TAG 3.3.1)
 FetchContent_MakeAvailable(SQLiteCpp)
