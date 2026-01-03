@@ -209,9 +209,29 @@ _bsh_run_idx() {
         POSTDISPLAY=""; zle -R; zle .accept-line
     fi
 }
+
+# new features
+_bsh_insert_idx() {
+  local idx=$(($1 - 1))
+  if [[ -n "${_bsh_suggestions[$idx]}" ]]; then
+    BUFFER="${_bsh_suggestions[$idx]}" 
+    CURSOR=$#BUFFER                    
+    POSTDISPLAY=""                     
+    zle -R                             
+  fi
+}
+for i in {1..5}; do 
+  eval "_bsh_insert_$i() { _bsh_insert_idx $i; }; zle -N _bsh_insert_$i"
+done
 for i in {1..5}; do eval "_bsh_run_$i() { _bsh_run_idx $i; }; zle -N _bsh_run_$i"; done
+
 bindkey '^[1' _bsh_run_1; bindkey '¡' _bsh_run_1
 bindkey '^[2' _bsh_run_2; bindkey '™' _bsh_run_2
 bindkey '^[3' _bsh_run_3; bindkey '£' _bsh_run_3
 bindkey '^[4' _bsh_run_4; bindkey '¢' _bsh_run_4
 bindkey '^[5' _bsh_run_5; bindkey '∞' _bsh_run_5
+bindkey "^[!" _bsh_insert_1
+bindkey "^[@" _bsh_insert_2
+bindkey "^[#" _bsh_insert_3
+bindkey "^[$" _bsh_insert_4
+bindkey "^[%" _bsh_insert_5
