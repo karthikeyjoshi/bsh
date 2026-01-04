@@ -112,22 +112,17 @@ int main(int argc, char* argv[]) {
 
                 SearchScope scope = SearchScope::GLOBAL;
                 if (scope_str == "dir") scope = SearchScope::DIRECTORY;
-                
+
                 if (scope_str == "branch") {
-                    scope = SearchScope::BRANCH;
-                    
-                    // 1. Resolve branch from CWD
                     auto branch_opt = get_git_branch(ctx_val);
-                    
                     if (branch_opt) {
+                        scope = SearchScope::BRANCH;
                         ctx_val = *branch_opt;
-                        // --- PROTOCOL CHANGE ---
-                        // Send the resolved branch name back to the client
-                        // so the UI can display "BSH: Branch (main)"
                         response += "##BRANCH:" + ctx_val + "\n";
-                    } else {
-                        ctx_val = "";
-                        response += "##BRANCH:unknown\n";
+                    } 
+                    else {
+                        scope = SearchScope::DIRECTORY;
+                        response += "##SCOPE:DIRECTORY\n";
                     }
                 }
 
