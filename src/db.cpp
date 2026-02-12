@@ -169,6 +169,8 @@ void HistoryDB::logCommand(const std::string& raw_cmd, const std::string& sessio
     }
 }
 
+// src/db.cpp
+
 std::vector<SearchResult> HistoryDB::search(const std::string& query, 
                                             SearchScope scope,
                                             const std::string& context_val,
@@ -177,9 +179,9 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
     try {
         std::string sql;
 
-        // OPTIMIZATION: Split Global vs Scoped search
+        // 1. SELECT THE STRATEGY
+        // FAST PATH: Global search (no complex filters)
         if (scope == SearchScope::GLOBAL && !only_success) {
-            // FAST PATH: No Join on Executions
             sql = "SELECT c.id, c.cmd_text "
                   "FROM commands_fts fts "
                   "JOIN commands c ON fts.rowid = c.id "
@@ -188,8 +190,8 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                   "AND c.cmd_text NOT LIKE './bsh%' "
                   "ORDER BY c.last_timestamp DESC LIMIT 5";
         } 
+        // SLOW PATH: Needs context (Directory/Branch) OR Success Filter
         else {
-            // SLOW PATH: Context aware (needs Executions table)
             sql = "SELECT MAX(c.id), c.cmd_text "
                   "FROM commands_fts fts "
                   "JOIN commands c ON fts.rowid = c.id "
@@ -198,36 +200,47 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                   "AND c.cmd_text NOT LIKE 'bsh%' "
                   "AND c.cmd_text NOT LIKE './bsh%' ";
 
-        if (scope == SearchScope::DIRECTORY) {
-            sql += " AND e.cwd = ?";
-        }
-        else if (scope == SearchScope::BRANCH) {
-            if (context_val.empty() || context_val == "unknown") {
-                sql += " AND (e.git_branch IS NULL OR e.git_branch = '')";
-            } else {
-                sql += " AND e.git_branch = ?";
+            // Context Filters
+            if (scope == SearchScope::DIRECTORY) {
+                sql += " AND e.cwd = ?";
             }
+            else if (scope == SearchScope::BRANCH) {
+                // Handle "unknown" branches gracefully
+                if (context_val.empty() || context_val == "unknown") {
+                    sql += " AND (e.git_branch IS NULL OR e.git_branch = '')";
+                } else {
+                    sql += " AND e.git_branch = ?";
+                }
+            }
+            
+            // Success Filter
+            // We use 'e.exit_code' from the executions table
+            if (only_success) {
+                sql += " AND e.exit_code = 0";
+            }
+
+            // Grouping and Ordering
+            sql += " GROUP BY c.id ORDER BY MAX(e.timestamp) DESC LIMIT 5";
         }
-        
-        if (only_success) sql += " AND e.exit_code = 0";
 
-        sql += "GROUP BY c.id ORDER BY MAX(e.timestamp) DESC LIMIT 5";
-    }
-
+        // 2. BIND PARAMETERS
         SQLite::Statement query_stmt(*db_, sql);
-
+        
+        // Bind 1: The Search Query (Always present)
         query_stmt.bind(1, sanitize_fts_query(query));
         
-        int bind_idx = 2;
+        // Bind 2: Context (Only if using SLOW PATH with constraints)
+        // We only bind if we are NOT in Global mode (or if Global mode didn't use the fast path? No, Global never binds index 2)
         if (scope == SearchScope::DIRECTORY) {
-            query_stmt.bind(bind_idx, context_val);
+            query_stmt.bind(2, context_val);
         }
         else if (scope == SearchScope::BRANCH) {
-            if (!context_val.empty() && context_val != "unknown") {
-                query_stmt.bind(bind_idx, context_val);
-            }
+             if (!context_val.empty() && context_val != "unknown") {
+                 query_stmt.bind(2, context_val);
+             }
         }
 
+        // 3. EXECUTE
         while (query_stmt.executeStep()) {
             results.push_back({
                 query_stmt.getColumn(0),
@@ -235,7 +248,7 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
             });
         }
     } catch (std::exception& e) {
-        std::cerr << "DB Error: " << e.what() << std::endl;
+        std::cerr << "DB Search Error: " << e.what() << std::endl;
     }
     return results;
 }
