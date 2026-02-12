@@ -31,7 +31,9 @@ void HistoryDB::initSchema() {
         int current_version = db_->execAndGet("PRAGMA user_version").getInt();
 
         // set target version of system
-        const int TARGET_VERSION = 2;
+        const int TARGET_VERSION = 3;
+
+        bool needs_vacuum = false;
 
         // migrating one step at a time
         while (current_version < TARGET_VERSION) {
@@ -83,12 +85,34 @@ void HistoryDB::initSchema() {
                 db_->exec("PRAGMA user_version = 2");
             }
 
+            else if (current_version == 2) {
+                // v2 -> v3: Denormalization
+                db_->exec("ALTER TABLE commands ADD COLUMN last_timestamp INTEGER DEFAULT 0;");
+                
+                // Backfill (Heavy operation)
+                db_->exec("UPDATE commands SET last_timestamp = ("
+                          "  SELECT MAX(timestamp) FROM executions "
+                          "  WHERE executions.command_id = commands.id"
+                          ");");
+                
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_cmd_timestamp ON commands(last_timestamp);");
+
+                // 2. Mark for vacuum, but DO NOT run it yet
+                needs_vacuum = true;
+
+                current_version = 3;
+                db_->exec("PRAGMA user_version = 3");
+            }
+
             else {
                 std::cerr << "NO Migration logic for v" << current_version << "->v" << (current_version+1) << std::endl;
                 break;
             }
 
             transaction.commit();
+        }
+        if (needs_vacuum) {
+            db_->exec("VACUUM;"); 
         }
 
         stmt_insert_cmd_ = std::make_unique<SQLite::Statement>(*db_, 
@@ -134,6 +158,11 @@ void HistoryDB::logCommand(const std::string& raw_cmd, const std::string& sessio
             stmt_insert_exec_->bind(6, duration);
             stmt_insert_exec_->bind(7, (int64_t)timestamp);
             stmt_insert_exec_->exec();
+
+            SQLite::Statement update_ts(*db_, "UPDATE commands SET last_timestamp = ? WHERE id = ?");
+            update_ts.bind(1, (int64_t)timestamp);
+            update_ts.bind(2, cmd_id);
+            update_ts.exec();
         }
     } catch (std::exception& e) {
         std::cerr << "Log Error: " << e.what() << std::endl;
@@ -146,15 +175,28 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                                             bool only_success) {
     std::vector<SearchResult> results;
     try {
-        // FIX: Updated Query for FTS5
-        // We join commands_fts to use the index, then join executions for context.
-        std::string sql = "SELECT MAX(c.id), c.cmd_text "
-                          "FROM commands_fts fts "
-                          "JOIN commands c ON fts.rowid = c.id "
-                          "JOIN executions e ON e.command_id = c.id "
-                          "WHERE commands_fts MATCH ? "
-                          "AND c.cmd_text NOT LIKE 'bsh%' "
-                          "AND c.cmd_text NOT LIKE './bsh%' ";
+        std::string sql;
+
+        // OPTIMIZATION: Split Global vs Scoped search
+        if (scope == SearchScope::GLOBAL && !only_success) {
+            // FAST PATH: No Join on Executions
+            sql = "SELECT c.id, c.cmd_text "
+                  "FROM commands_fts fts "
+                  "JOIN commands c ON fts.rowid = c.id "
+                  "WHERE commands_fts MATCH ? "
+                  "AND c.cmd_text NOT LIKE 'bsh%' "
+                  "AND c.cmd_text NOT LIKE './bsh%' "
+                  "ORDER BY c.last_timestamp DESC LIMIT 5";
+        } 
+        else {
+            // SLOW PATH: Context aware (needs Executions table)
+            sql = "SELECT MAX(c.id), c.cmd_text "
+                  "FROM commands_fts fts "
+                  "JOIN commands c ON fts.rowid = c.id "
+                  "JOIN executions e ON e.command_id = c.id "
+                  "WHERE commands_fts MATCH ? "
+                  "AND c.cmd_text NOT LIKE 'bsh%' "
+                  "AND c.cmd_text NOT LIKE './bsh%' ";
 
         if (scope == SearchScope::DIRECTORY) {
             sql += " AND e.cwd = ?";
@@ -170,6 +212,7 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
         if (only_success) sql += " AND e.exit_code = 0";
 
         sql += "GROUP BY c.id ORDER BY MAX(e.timestamp) DESC LIMIT 5";
+    }
 
         SQLite::Statement query_stmt(*db_, sql);
 
