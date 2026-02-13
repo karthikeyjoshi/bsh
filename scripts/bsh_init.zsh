@@ -18,6 +18,8 @@ typeset -g _bsh_start_time
 typeset -g _bsh_current_cmd
 typeset -g _bsh_mode=0 # 0=Global, 1=Directory, 2=Branch
 typeset -g _bsh_cycle_direction=1 # 1=Forward, -1=Backward (Fixes the skip bug)
+typeset -g _bsh_selection_idx=-1
+typeset -g _bsh_original_query=""
 _bsh_filter_success=0
 
 # --- DAEMON MANAGER ---
@@ -41,6 +43,9 @@ bindkey '^F' _bsh_toggle_success_filter
 
 # --- SUGGESTION ENGINE ---
 _bsh_refresh_suggestions() {
+    _bsh_selection_idx=-1
+    _bsh_original_query="$BUFFER"
+
     _bsh_ensure_daemon
     if [[ ! -x "$BSH_BINARY" ]]; then return; fi
     if [[ -z "${BUFFER// }" ]]; then
@@ -220,6 +225,48 @@ _bsh_insert_idx() {
   fi
 }
 
+_bsh_cycle_up() {
+    # If no suggestions exist, fallback to standard history search
+    if [[ ${#_bsh_suggestions[@]} -eq 0 ]]; then
+        zle up-line-or-history
+        return
+    fi
+
+    local next_idx=$((_bsh_selection_idx + 1))
+    
+    # Check if the next index exists in our suggestions
+    if [[ -n "${_bsh_suggestions[$next_idx]}" ]]; then
+        _bsh_selection_idx=$next_idx
+        BUFFER="${_bsh_suggestions[$_bsh_selection_idx]}"
+        CURSOR=$#BUFFER
+    fi
+}
+
+_bsh_cycle_down() {
+    # If no suggestions exist, fallback
+    if [[ ${#_bsh_suggestions[@]} -eq 0 ]]; then
+        zle down-line-or-history
+        return
+    fi
+
+    local prev_idx=$((_bsh_selection_idx - 1))
+
+    if [[ $prev_idx -ge 0 ]]; then
+        # Moving up the list (towards 0)
+        _bsh_selection_idx=$prev_idx
+        BUFFER="${_bsh_suggestions[$_bsh_selection_idx]}"
+        CURSOR=$#BUFFER
+    elif [[ $prev_idx -eq -1 ]]; then
+        # Restore the original query (back to what user typed)
+        _bsh_selection_idx=-1
+        BUFFER="$_bsh_original_query"
+        CURSOR=$#BUFFER
+    fi
+}
+
+zle -N _bsh_cycle_up
+zle -N _bsh_cycle_down
+
 for i in {1..5}; do 
   eval "_bsh_insert_$i() { _bsh_insert_idx $i; }; zle -N _bsh_insert_$i"
 done
@@ -244,3 +291,7 @@ bindkey '€' _bsh_insert_2
 bindkey '‹' _bsh_insert_3
 bindkey '›' _bsh_insert_4
 bindkey 'ﬁ' _bsh_insert_5
+
+# Paste the following into your .zshrc if you want to use the up/down arrow keys for cycling through suggestions instead of history:
+# bindkey '^[[A' _bsh_cycle_up
+# bindkey '^[[B' _bsh_cycle_down
