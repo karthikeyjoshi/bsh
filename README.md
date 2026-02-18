@@ -29,11 +29,15 @@ BSH tracks the exit code of every command. Users can toggle a "Success Filter" t
 ### Local-First Architecture
 BSH operates with a client-daemon architecture completely on the local machine. No telemetry or history data is transmitted to external servers.
 
-## 3. Installation
+## 3. Demo
+
+![BSH Demo](assets/demo.gif)
+
+## 4. Installation
 
 BSH requires a C++20 compliant compiler (GCC 10+ or Clang 10+), CMake, and Ninja.
 
-### 3.1 Install Dependencies
+### 4.1 Install Dependencies
 
 Ensure you have the development headers for `libgit2`, `sqlite3`, and `openssl`.
 
@@ -53,7 +57,7 @@ sudo dnf install gcc-c++ cmake ninja-build libgit2-devel sqlite-devel openssl-de
 brew install cmake ninja libgit2 sqlite openssl python pkg-config
 ```
 
-### 3.2 Build and Install
+### 4.2 Build and Install
 
 The provided install script compiles the binaries (Client and Daemon), sets up the directory structure in `~/.bsh`, and configures Zsh hooks.
 
@@ -69,7 +73,7 @@ chmod +x install.sh
 
 **Post-Installation:** Restart your terminal session or run `source ~/.zshrc` to initialize the integration.
 
-### 3.3 Import Existing History
+### 4.3 Import Existing History
 
 To migrate your existing `.zsh_history` into the BSH SQLite database:
 
@@ -77,7 +81,7 @@ To migrate your existing `.zsh_history` into the BSH SQLite database:
 python3 import_zsh.py
 ```
 
-## 4. Usage & Key Bindings
+## 5. Usage & Key Bindings
 
 The BSH interface activates automatically upon typing.
 
@@ -107,7 +111,7 @@ bindkey '^K' _bsh_cycle_up
 bindkey '^J' _bsh_cycle_down
 ```
 
-## 5. Technical Architecture
+## 6. Technical Architecture
 
 BSH employs a high-performance Client-Daemon architecture to ensure zero latency on the main thread.
 
@@ -122,7 +126,7 @@ BSH utilizes a relational schema to optimize storage and query performance.
 * **`commands` Table:** Stores unique command strings to prevent redundancy.
 * **`executions` Table:** Tracks the execution timeline, including Session ID, CWD, Git Branch, Exit Code, and Duration.
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 ### Daemon Management
 
