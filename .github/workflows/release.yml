@@ -25,10 +25,10 @@ jobs:
             artifact_name: bsh-macos-arm64
             install_deps: brew install libgit2
             
-          # Apple Intel (Older Macs - Using highly stable macos-12)
-          - os: macos-12
+          # Apple Intel Older Macs
+          - os: macos-15-intel
             artifact_name: bsh-macos-x86_64
-            install_deps: brew install ninja libgit2 pkg-config python3
+            install_deps: brew install libgit2
 
     steps:
       - name: Checkout Source Code
