@@ -2,3 +2,4 @@ build
 .vscode
 benchmark*.md
 benchmark*.png
+man_inst.sh

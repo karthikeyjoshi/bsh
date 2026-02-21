@@ -213,37 +213,52 @@ int main(int argc, char* argv[]) {
                 }
 
                 for (const auto& r : results) {
-                    response += r.cmd + "\n";
+                    std::string flat_cmd = r.cmd;
+                    std::replace(flat_cmd.begin(), flat_cmd.end(), '\n', ' ');
+                    std::replace(flat_cmd.begin(), flat_cmd.end(), '\r', ' ');
+                    response += flat_cmd + "\n";
                 }
                 response += "##BOX##\n";
-
+                
+                
                 std::vector<std::string> display_lines;
-                size_t max_len = utf8_length(header_text);
-                int safe_limit = term_width - 7;
-                if (safe_limit < 10) safe_limit = 10;
+                
+                int safe_limit = term_width - 6; 
+                if (safe_limit < 20) safe_limit = 20;
+
+                size_t max_content = utf8_length(header_text);
 
                 for (size_t i = 0; i < results.size(); ++i) {
-                    std::string line = std::to_string(i + 1) + ": " + results[i].cmd;
-                    if (utf8_length(line) > (size_t)safe_limit) {
-                        line = truncate_utf8(line, safe_limit - 3) + "...";
+                    std::string prefix = std::to_string(i + 1) + ": ";
+                    std::string cmd_text = results[i].cmd;
+
+                    size_t first_nl = cmd_text.find_first_of("\n\r");
+                    if (first_nl != std::string::npos) {
+                        cmd_text = cmd_text.substr(0, first_nl) + "...";
                     }
-                    line = " " + line; 
-                    size_t len = utf8_length(line);
-                    if (len > max_len) max_len = len;
-                    display_lines.push_back(line);
+
+                    if (utf8_length(prefix + cmd_text) > (size_t)safe_limit) {
+                        cmd_text = truncate_utf8(cmd_text, safe_limit - utf8_length(prefix) - 3) + "...";
+                    }
+
+                    std::string full_line = prefix + cmd_text;
+                    size_t len = utf8_length(full_line);
+                    if (len > max_content) max_content = len;
+                    display_lines.push_back(full_line);
                 }
 
-                max_len += 4; 
+                size_t total_width = max_content + 2;
 
-                std::string top_border = "\n" + pad_right("╭" + header_text, max_len + 1, "─") + "╮\n";
-                response += top_border;
+                response += "\n"; 
+                std::string top = "╭" + header_text;
+                response += pad_right(top, total_width + 1, "─") + "╮\n";
 
                 for (const auto& dl : display_lines) {
-                    response += "│" + pad_right(dl, max_len, " ") + "│\n";
+                    std::string row = " " + dl;
+                    response += "│" + pad_right(row, total_width, " ") + "│\n";
                 }
 
-                std::string bottom_border = pad_right("╰", max_len + 1, "─") + "╯\n";
-                response += bottom_border;
+                response += "╰" + pad_right("", total_width, "─") + "╯\n";
             }
 
             else if (command == "RECORD" && args.size() >= 6) {
