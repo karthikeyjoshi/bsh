@@ -1,6 +1,6 @@
 set -e
 
-REPO="joshikarthikey/bsh"
+REPO="karthikeyjoshi/bsh"
 INSTALL_DIR="$HOME/.bsh"
 ZSHRC_PATH="$HOME/.zshrc"
 
