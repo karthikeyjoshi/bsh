@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(bsh VERSION 0.2.0 LANGUAGES CXX)
+project(bsh VERSION 0.2.8 LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -35,3 +35,14 @@ install(TARGETS bsh-daemon
 
 install(FILES scripts/bsh_init.zsh 
         DESTINATION ${CMAKE_INSTALL_DATADIR}/bsh)
+
+set(CPACK_PACKAGE_NAME "bsh")
+set(CPACK_PACKAGE_VENDOR "Karthikey Joshi")
+set(CPACK_PACKAGE_CONTACT "karthikey.cse@gmail.com")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "High-performance, Git-aware shell history middleware")
+
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgit2-dev, libsqlite3-dev, python3")
+
+set(CPACK_GENERATOR "DEB")
+include(CPack)
