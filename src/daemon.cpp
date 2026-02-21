@@ -15,6 +15,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
