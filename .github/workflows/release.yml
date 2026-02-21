@@ -23,10 +23,10 @@ jobs:
           # Apple Silicon (M1/M2/M3)
           - os: macos-latest
             artifact_name: bsh-macos-arm64
-            install_deps: brew install ninja libgit2 pkg-config python3
+            install_deps: brew install libgit2
             
-          # Apple Intel (Older Macs)
-          - os: macos-13
+          # Apple Intel (Older Macs - Using highly stable macos-12)
+          - os: macos-12
             artifact_name: bsh-macos-x86_64
             install_deps: brew install ninja libgit2 pkg-config python3
 
