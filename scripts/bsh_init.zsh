@@ -50,7 +50,9 @@ fi
 
 _bsh_ensure_daemon() {
     if ! pgrep -x "bsh-daemon" > /dev/null; then
-        if [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
+        if command -v bsh-daemon >/dev/null 2>&1; then
+            bsh-daemon &!
+        elif [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
             "$BSH_REPO_ROOT/bin/bsh-daemon" &!
         elif [[ -x "$BSH_REPO_ROOT/build/bsh-daemon" ]]; then
             "$BSH_REPO_ROOT/build/bsh-daemon" &!

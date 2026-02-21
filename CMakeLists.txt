@@ -22,3 +22,10 @@ add_executable(bsh-daemon
     src/git_utils.cpp
 )
 target_link_libraries(bsh-daemon PRIVATE SQLiteCpp PkgConfig::LIBGIT2)
+
+include(GNUInstallDirs)
+install(TARGETS bsh-daemon 
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(FILES scripts/bsh_init.zsh 
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/bsh)
