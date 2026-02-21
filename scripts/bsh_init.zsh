@@ -1,13 +1,17 @@
-local BSH_INIT_SCRIPT_PATH="${(%):-%N}"
-export BSH_REPO_ROOT="$(dirname $(dirname $BSH_INIT_SCRIPT_PATH))"
-
-if [[ -x "$BSH_REPO_ROOT/bin/bsh" ]]; then
-    export BSH_BINARY="$BSH_REPO_ROOT/bin/bsh"
-elif [[ -x "$BSH_REPO_ROOT/build/bsh" ]]; then
-    export BSH_BINARY="$BSH_REPO_ROOT/build/bsh"
+if command -v bsh-daemon >/dev/null 2>&1; then
+    export BSH_DAEMON_BIN="$(command -v bsh-daemon)"
 else
-    echo "BSH Error: Binary not found in $BSH_REPO_ROOT/bin or $BSH_REPO_ROOT/build"
-    return 1
+    local BSH_INIT_SCRIPT_PATH="${(%):-%N}"
+    local BSH_REPO_ROOT="$(dirname $(dirname $BSH_INIT_SCRIPT_PATH))"
+
+    if [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
+        export BSH_DAEMON_BIN="$BSH_REPO_ROOT/bin/bsh-daemon"
+    elif [[ -x "$BSH_REPO_ROOT/build/bsh-daemon" ]]; then
+        export BSH_DAEMON_BIN="$BSH_REPO_ROOT/build/bsh-daemon"
+    else
+        echo "BSH Error: bsh-daemon not found in PATH or local build directories."
+        return 1
+    fi
 fi
 
 
@@ -50,14 +54,8 @@ fi
 
 _bsh_ensure_daemon() {
     if ! pgrep -x "bsh-daemon" > /dev/null; then
-        if command -v bsh-daemon >/dev/null 2>&1; then
-            bsh-daemon &!
-        elif [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
-            "$BSH_REPO_ROOT/bin/bsh-daemon" &!
-        elif [[ -x "$BSH_REPO_ROOT/build/bsh-daemon" ]]; then
-            "$BSH_REPO_ROOT/build/bsh-daemon" &!
-        fi
-        sleep 0.1 # Allow socket creation
+        "$BSH_DAEMON_BIN" &!
+        sleep 0.1 # Allow socket creation time
     fi
 }
 
