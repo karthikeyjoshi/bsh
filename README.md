@@ -1,6 +1,6 @@
 # BSH (Better Shell History)
 
-**A High-Performance, Git-Aware, Predictive Terminal History Middleware**
+A High-Performance, Git-Aware, Predictive Terminal History Middleware
 
 ## 1. Executive Summary
 
@@ -13,20 +13,25 @@ Engineered for performance-critical environments using C++20, BSH introduces a "
 ### Context-Aware Retrieval
 
 Standard shells treat history as a global list. BSH introduces dimensionality to command history:
+
 * **Global Scope:** Search the entire execution history.
 * **Directory Scope:** Filter commands executed specifically in the current folder.
 * **Git Branch Scope:** Filter commands executed while on the active Git branch.
 
 ### Live Predictive Interface
+
 Integrated directly via the Zsh Line Editor (ZLE), BSH renders a "Top 5" relevance list in real-time as the user types.
 
 ### Prompt Cycling (Opt-In)
+
 Users can bind keys (such as Up/Down arrows) to cycle through BSH predictions directly in the command prompt, replacing the default history behavior with context-aware results.
 
 ### Exit Code Filtering
+
 BSH tracks the exit code of every command. Users can toggle a "Success Filter" to instantly hide failed commands (typos, compilation errors).
 
 ### Local-First Architecture
+
 BSH operates with a client-daemon architecture completely on the local machine. No telemetry or history data is transmitted to external servers.
 
 ## 3. Demo
@@ -35,51 +40,95 @@ BSH operates with a client-daemon architecture completely on the local machine. 
 
 ## 4. Installation
 
-BSH requires a C++20 compliant compiler (GCC 10+ or Clang 10+), CMake, and Ninja.
+BSH can be installed via package managers or built from source.
 
-### 4.1 Install Dependencies
+### 4.1 Package Managers
 
-Ensure you have the development headers for `libgit2`, `sqlite3`, and `openssl`.
+The easiest way to keep BSH updated and manage its dependencies automatically.
 
-#### Ubuntu / Debian / Pop!_OS / Linux Mint
+#### macOS (Homebrew)
+
+```bash
+brew tap karthikeyjoshi/bsh
+brew install bsh
+```
+
+#### Arch Linux (AUR)
+
+```bash
+# Using yay
+yay -S aur/bsh
+
+# Using paru
+paru -S aur/bsh
+```
+
+After installation, add the following line to your `~/.zshrc` to enable the middleware hooks:
+
+**Linux:**
+
+```bash
+source /usr/share/bsh/bsh_init.zsh
+```
+
+**macOS:**
+
+```bash
+source $(brew --prefix)/share/bsh/bsh_init.zsh
+```
+
+---
+
+### 4.2 Universal One-Liner
+
+If you are unsure which version to use, this script detects your OS and installs the appropriate package automatically:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/joshikarthikey/bsh/main/install.sh | bash
+```
+
+---
+
+### 4.3 Build from Source (Manual)
+
+If your distribution isn't covered above, you can build BSH manually. It requires a **C++20** compliant compiler (GCC 10+, Clang 10+), **CMake**, and **Ninja**.
+
+#### 1. Install System Dependencies
+
+**Ubuntu / Debian / Mint:**
+
 ```bash
 sudo apt update
 sudo apt install build-essential cmake ninja-build libgit2-dev libsqlite3-dev libssl-dev zlib1g-dev pkg-config python3
 ```
 
-#### Fedora / RHEL / CentOS
+**Fedora / RHEL / CentOS:**
+
 ```bash
 sudo dnf install gcc-c++ cmake ninja-build libgit2-devel sqlite-devel openssl-devel zlib-devel pkgconf python3
 ```
 
-#### macOS (via Homebrew)
+**macOS:**
+
 ```bash
 brew install cmake ninja libgit2 sqlite openssl python pkg-config
 ```
 
-### 4.2 Build and Install
-
-The provided install script compiles the binaries (Client and Daemon), sets up the directory structure in `~/.bsh`, and configures Zsh hooks.
+#### 2. Build and Install
 
 ```bash
-# 1. Clone the repository
+# Clone the repository
 git clone https://github.com/joshikarthikey/bsh.git
 cd bsh
 
-# 2. Execute the installer
-chmod +x install.sh
-./install.sh
+# Run the local installer
+chmod +x build.sh
+./build.sh
 ```
 
-**Post-Installation:** Restart your terminal session or run `source ~/.zshrc` to initialize the integration.
+---
 
-### 4.3 Import Existing History
-
-To migrate your existing `.zsh_history` into the BSH SQLite database:
-
-```bash
-python3 import_zsh.py
-```
+**Post-Installation:** Restart your terminal or run `source ~/.zshrc` to initialize.
 
 ## 5. Usage & Key Bindings
 
@@ -140,11 +189,13 @@ The `bsh-daemon` is designed to auto-start. If suggestions disappear, the daemon
 To cleanly remove BSH:
 
 1. **Remove Files:**
+
     ```bash
     rm -rf ~/.bsh
     ```
 
 2. **Clean Configuration:** Open `~/.zshrc` and remove the integration block:
+
     ```bash
     # BSH History Integration (Added by install.sh)
     source /home/<user>/.bsh/scripts/bsh_init.zsh
