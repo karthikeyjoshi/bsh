@@ -1,5 +1,3 @@
-# scripts/bsh_init.zsh
-
 local BSH_INIT_SCRIPT_PATH="${(%):-%N}"
 export BSH_REPO_ROOT="$(dirname $(dirname $BSH_INIT_SCRIPT_PATH))"
 
@@ -12,7 +10,7 @@ else
     return 1
 fi
 
-# State Variables
+
 typeset -gA _bsh_suggestions
 typeset -g _bsh_start_time
 typeset -g _bsh_current_cmd
@@ -22,7 +20,6 @@ typeset -g _bsh_selection_idx=-1
 typeset -g _bsh_original_query=""
 _bsh_filter_success=0
 
-# --- DAEMON MANAGER ---
 _bsh_ensure_daemon() {
     if ! pgrep -x "bsh-daemon" > /dev/null; then
         if [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
@@ -41,136 +38,123 @@ _bsh_toggle_success_filter() {
 zle -N _bsh_toggle_success_filter
 bindkey '^F' _bsh_toggle_success_filter
 
-# --- SUGGESTION ENGINE ---
+zmodload zsh/net/socket
+zmodload zsh/datetime
+
+typeset -g _bsh_sock_path
+if [[ -n "$XDG_RUNTIME_DIR" ]]; then
+    _bsh_sock_path="$XDG_RUNTIME_DIR/bsh.sock"
+else
+    _bsh_sock_path="/tmp/bsh_$(id -u).sock"
+fi
+
+_bsh_ensure_daemon() {
+    if ! pgrep -x "bsh-daemon" > /dev/null; then
+        if [[ -x "$BSH_REPO_ROOT/bin/bsh-daemon" ]]; then
+            "$BSH_REPO_ROOT/bin/bsh-daemon" &!
+        elif [[ -x "$BSH_REPO_ROOT/build/bsh-daemon" ]]; then
+            "$BSH_REPO_ROOT/build/bsh-daemon" &!
+        fi
+        sleep 0.1 # Allow socket creation
+    fi
+}
+
+_bsh_toggle_success_filter() {
+    if [[ $_bsh_filter_success -eq 0 ]]; then _bsh_filter_success=1; else _bsh_filter_success=0; fi
+    _bsh_refresh_suggestions
+    zle redisplay
+}
+zle -N _bsh_toggle_success_filter
+bindkey '^F' _bsh_toggle_success_filter
+
 _bsh_refresh_suggestions() {
     _bsh_selection_idx=-1
     _bsh_original_query="$BUFFER"
 
-    _bsh_ensure_daemon
-    if [[ ! -x "$BSH_BINARY" ]]; then return; fi
     if [[ -z "${BUFFER// }" ]]; then
         POSTDISPLAY=""
         return
     fi
 
-    # 1. Prepare Arguments
-    local args=("$BUFFER" "--scope")
-    local header_text=" BSH: Global "
-    
-    if [[ $_bsh_mode -eq 1 ]]; then
-        args+=("dir" "--cwd" "$PWD")
-        header_text=" BSH: Directory "
-    elif [[ $_bsh_mode -eq 2 ]]; then
-        args+=("branch" "--cwd" "$PWD")
-        header_text=" BSH: Branch " 
-    else
-        args+=("global")
-    fi
+    _bsh_ensure_daemon
 
-    if [[ $_bsh_filter_success -eq 1 ]]; then
-        args+=("--success")
-        header_text="${header_text% } [OK] "
-    fi
+    local scope="global"
+    local ctx="$PWD"
+    if [[ $_bsh_mode -eq 1 ]]; then scope="dir"; fi
+    if [[ $_bsh_mode -eq 2 ]]; then scope="branch"; fi
 
-    # 2. Execution
-    local output
-    output=$("$BSH_BINARY" suggest "${args[@]}" 2>/dev/null)
-    if [[ -z "$output" ]]; then
+    if ! zsocket "$_bsh_sock_path" 2>/dev/null; then 
         POSTDISPLAY=""
-        _bsh_suggestions=()
         return
     fi
+    local fd=$REPLY
 
-    # 3. Parse Output & Handle Metadata
-    _bsh_suggestions=()
-    local -a display_lines
-    local -a raw_lines
-    raw_lines=("${(@f)output}") 
+    local delim=$'\x1F'
 
+    # Send IPC message: SUGGEST \x1F query \x1F scope \x1F context \x1F success \x1F term_width
+    local msg="SUGGEST\x1F${BUFFER}\x1F${scope}\x1F${ctx}\x1F${_bsh_filter_success}\x1F${COLUMNS:-80}"
+    print -u $fd -n "$msg"
+
+    local line
+    local parsing_box=0
+    local box_str=""
     local i=0
-    for line in "${raw_lines[@]}"; do
-        # --- SMART SKIP LOGIC ---
-        if [[ "$line" == "##BRANCH:"* ]]; then
-            local branch_name="${line##*:}"
-            
-            # If Branch is 'unknown' (not a repo), we must skip this page.
-            if [[ "$branch_name" == "unknown" || -z "$branch_name" ]]; then
-                if [[ $_bsh_mode -eq 2 ]]; then
-                    # FIX: Use cycle direction to decide where to skip
-                    if [[ $_bsh_cycle_direction -eq -1 ]]; then
-                        # Moving Backward (Global -> Branch -> Directory)
-                        _bsh_mode=1
-                    else
-                        # Moving Forward (Directory -> Branch -> Global)
-                        _bsh_mode=0
-                    fi
-                    
-                    # RECURSIVE CALL: Refresh immediately with new mode
-                    _bsh_refresh_suggestions
-                    return
-                fi
-            else
-                 header_text=" BSH: Branch ($branch_name) "
-            fi
-            continue 
+    _bsh_suggestions=()
+
+    while read -r -u $fd line; do
+        line="${line%$'\r'}"
+        if [[ "$line" == "##SKIP##" ]]; then
+            exec {fd}<&-
+            if [[ $_bsh_cycle_direction -eq -1 ]]; then _bsh_mode=1; else _bsh_mode=0; fi
+            _bsh_refresh_suggestions
+            return
+        elif [[ "$line" == "##BOX##" ]]; then
+            parsing_box=1
+        elif [[ $parsing_box -eq 0 ]]; then
+            _bsh_suggestions[$i]="$line"
+            ((i++))
+        else
+            box_str+="$line"$'\n'
         fi
-
-        # --- PROCESS SUGGESTION ---
-        [[ $i -ge 5 ]] && break
-        [[ -z "${line// }" ]] && continue
-
-        _bsh_suggestions[$i]="$line"
-        local display_num=$((i + 1))
-        local text=" $display_num: $line"
-        
-        # Truncation
-        local term_width=${COLUMNS:-80}
-        local safe_text_limit=$((term_width - 7))
-        if (( ${#text} > safe_text_limit )); then
-            text="${text:0:$((safe_text_limit - 3))}..."
-        fi
-
-        display_lines+=("$text")
-        ((i++))
     done
+    exec {fd}<&- 
 
-    # 4. Box Drawing
-    local max_len=${#header_text}
-    for line in "${display_lines[@]}"; do
-         local clean_text=${line//$'\e'[\[(]*([0-9;])[@-~]/}
-         if (( ${#clean_text} > max_len )); then max_len=${#clean_text}; fi
-    done
-    max_len=$((max_len + 4))
-
-    if [[ ${#display_lines[@]} -eq 0 ]]; then
+    if [[ ${#_bsh_suggestions[@]} -eq 0 ]]; then
         POSTDISPLAY=""
-        return
+    else
+        POSTDISPLAY="${box_str%$'\n'}"
     fi
-
-    local result=$'\n'
-    local top_content="╭$header_text"
-    result+="${(r:max_len+1::─:)top_content}╮"
-
-    for line in "${display_lines[@]}"; do
-        result+=$'\n'
-        result+="│${(r:max_len:: :)line}│"
-    done
-    result+=$'\n'
-    local bot_content="╰"
-    result+="${(r:max_len+1::─:)bot_content}╯"
-
-    POSTDISPLAY="$result"
 }
 
-# --- STATE SWITCHER ---
+_bsh_preexec() { _bsh_current_cmd="$1"; _bsh_start_time=$EPOCHREALTIME; }
+_bsh_precmd() {
+    local exit_code=$?
+    if [[ -z "$_bsh_start_time" || -z "$_bsh_current_cmd" ]]; then return; fi
+    local now=$EPOCHREALTIME; local duration=$(( (now - _bsh_start_time) * 1000 ))
+    local cmd_log="$_bsh_current_cmd"
+    _bsh_start_time=""; _bsh_current_cmd=""
+
+    if zsocket "$_bsh_sock_path" 2>/dev/null; then
+        local fd=$REPLY
+        local delim=$'\x1F'
+        local msg="RECORD${delim}${cmd_log}${delim}$$$delim${PWD}${delim}${exit_code}${delim}${duration%.*}"
+        print -r -u $fd -n -- "$msg"
+        read -t 0.05 -u $fd # Clear the OK response to avoid broken pipes
+        exec {fd}<&-
+    fi
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _bsh_preexec
+add-zsh-hook precmd _bsh_precmd
+
 _bsh_cycle_mode_fwd() { 
-    _bsh_cycle_direction=1  # Set Direction Forward
+    _bsh_cycle_direction=1 
     (( _bsh_mode = (_bsh_mode + 1) % 3 ))
     _bsh_refresh_suggestions
     zle -R 
 }
 _bsh_cycle_mode_back() { 
-    _bsh_cycle_direction=-1 # Set Direction Backward
+    _bsh_cycle_direction=-1 
     (( _bsh_mode = _bsh_mode - 1 ))
     if (( _bsh_mode < 0 )); then _bsh_mode=2; fi
     _bsh_refresh_suggestions
@@ -184,26 +168,12 @@ bindkey "^[[1;3C" _bsh_cycle_mode_fwd
 bindkey "^[b" _bsh_cycle_mode_back
 bindkey "^[[1;3D" _bsh_cycle_mode_back
 
-# --- HOOKS ---
-_bsh_preexec() { _bsh_current_cmd="$1"; zmodload zsh/datetime; _bsh_start_time=$EPOCHREALTIME; }
-_bsh_precmd() {
-    local exit_code=$?
-    if [[ -z "$_bsh_start_time" || -z "$_bsh_current_cmd" ]]; then return; fi
-    local now=$EPOCHREALTIME; local duration=$(( (now - _bsh_start_time) * 1000 ))
-    local cmd_log="$_bsh_current_cmd"
-    _bsh_start_time=""; _bsh_current_cmd=""
-    "$BSH_BINARY" record --cmd "$cmd_log" --cwd "$PWD" --exit "$exit_code" --duration "${duration%.*}" --session "$$"
-}
-autoload -Uz add-zsh-hook
-add-zsh-hook preexec _bsh_preexec
-add-zsh-hook precmd _bsh_precmd
 
 _bsh_self_insert() { zle .self-insert; _bsh_refresh_suggestions; }
 zle -N self-insert _bsh_self_insert
 _bsh_backward_delete_char() { zle .backward-delete-char; _bsh_refresh_suggestions; }
 zle -N backward-delete-char _bsh_backward_delete_char
 
-# --- BINDINGS ---
 _bsh_accept_line() { POSTDISPLAY=""; zle -R; zle .accept-line; }
 zle -N accept-line _bsh_accept_line
 
@@ -226,7 +196,6 @@ _bsh_insert_idx() {
 }
 
 _bsh_cycle_up() {
-    # If no suggestions exist, fallback to standard history search
     if [[ ${#_bsh_suggestions[@]} -eq 0 ]]; then
         zle up-line-or-history
         return
@@ -234,7 +203,6 @@ _bsh_cycle_up() {
 
     local next_idx=$((_bsh_selection_idx + 1))
     
-    # Check if the next index exists in our suggestions
     if [[ -n "${_bsh_suggestions[$next_idx]}" ]]; then
         _bsh_selection_idx=$next_idx
         BUFFER="${_bsh_suggestions[$_bsh_selection_idx]}"
@@ -243,7 +211,6 @@ _bsh_cycle_up() {
 }
 
 _bsh_cycle_down() {
-    # If no suggestions exist, fallback
     if [[ ${#_bsh_suggestions[@]} -eq 0 ]]; then
         zle down-line-or-history
         return
@@ -252,12 +219,10 @@ _bsh_cycle_down() {
     local prev_idx=$((_bsh_selection_idx - 1))
 
     if [[ $prev_idx -ge 0 ]]; then
-        # Moving up the list (towards 0)
         _bsh_selection_idx=$prev_idx
         BUFFER="${_bsh_suggestions[$_bsh_selection_idx]}"
         CURSOR=$#BUFFER
     elif [[ $prev_idx -eq -1 ]]; then
-        # Restore the original query (back to what user typed)
         _bsh_selection_idx=-1
         BUFFER="$_bsh_original_query"
         CURSOR=$#BUFFER
