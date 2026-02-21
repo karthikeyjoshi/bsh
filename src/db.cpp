@@ -2,7 +2,6 @@
 #include <iostream>
 #include <algorithm> 
 
-// --- Helper: Trim String ---
 std::string trim_cmd(const std::string& str) {
     auto start = str.find_first_not_of(" \t\n\r");
     if (start == std::string::npos) return "";
@@ -10,12 +9,8 @@ std::string trim_cmd(const std::string& str) {
     return str.substr(start, end - start + 1);
 }
 
-// Helper: Sanitize for FTS5
-// Prevents syntax errors if user types " OR " or special FTS chars
 std::string sanitize_fts_query(std::string query) {
-    // Basic sanitization: remove double quotes to prevent syntax breakage
     std::replace(query.begin(), query.end(), '"', ' ');
-    // We treat the query as a prefix search
     return "\"" + query + "\" *";
 }
 
@@ -23,24 +18,21 @@ HistoryDB::HistoryDB(const std::string& db_path) : db_path_(db_path) {
     db_ = std::make_unique<SQLite::Database>(db_path_, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
     db_->exec("PRAGMA journal_mode=WAL;");
     db_->exec("PRAGMA synchronous=NORMAL;");
+    db_->exec("PRAGMA busy_timeout=5000;"); 
 }
 
 void HistoryDB::initSchema() {
     try {
-        // get current version of system
         int current_version = db_->execAndGet("PRAGMA user_version").getInt();
 
-        // set target version of system
-        const int TARGET_VERSION = 3;
+        const int TARGET_VERSION = 4;
 
         bool needs_vacuum = false;
 
-        // migrating one step at a time
         while (current_version < TARGET_VERSION) {
             SQLite::Transaction transaction(*db_);
             
             if (current_version == 0) {
-                // base schema
                 db_->exec("CREATE TABLE IF NOT EXISTS commands ("
                         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                         "cmd_text TEXT UNIQUE NOT NULL"
@@ -67,18 +59,12 @@ void HistoryDB::initSchema() {
             }
 
             else if (current_version == 1) {
-                // v1 -> v2: Enable FTS5
-                
-                // 1. Create Virtual Table (External Content to save space)
-                // content='commands' means it reads data from the existing table
                 db_->exec("CREATE VIRTUAL TABLE IF NOT EXISTS commands_fts USING fts5(cmd_text, content='commands', content_rowid='id');");
 
-                // 2. Create Trigger to keep FTS index in sync with main table
                 db_->exec("CREATE TRIGGER IF NOT EXISTS commands_ai AFTER INSERT ON commands BEGIN "
                           "  INSERT INTO commands_fts(rowid, cmd_text) VALUES (new.id, new.cmd_text); "
                           "END;");
 
-                // 3. Populate FTS with existing data
                 db_->exec("INSERT INTO commands_fts(commands_fts) VALUES('rebuild');");
 
                 current_version = 2;
@@ -86,10 +72,8 @@ void HistoryDB::initSchema() {
             }
 
             else if (current_version == 2) {
-                // v2 -> v3: Denormalization
                 db_->exec("ALTER TABLE commands ADD COLUMN last_timestamp INTEGER DEFAULT 0;");
                 
-                // Backfill (Heavy operation)
                 db_->exec("UPDATE commands SET last_timestamp = ("
                           "  SELECT MAX(timestamp) FROM executions "
                           "  WHERE executions.command_id = commands.id"
@@ -97,11 +81,39 @@ void HistoryDB::initSchema() {
                 
                 db_->exec("CREATE INDEX IF NOT EXISTS idx_cmd_timestamp ON commands(last_timestamp);");
 
-                // 2. Mark for vacuum, but DO NOT run it yet
                 needs_vacuum = true;
 
                 current_version = 3;
                 db_->exec("PRAGMA user_version = 3");
+            }
+            else if (current_version == 3) {
+                db_->exec("DELETE FROM commands WHERE cmd_text LIKE 'bsh%' OR cmd_text LIKE './bsh%';");
+                db_->exec("INSERT INTO commands_fts(commands_fts) VALUES('rebuild');");
+
+                db_->exec("CREATE TABLE IF NOT EXISTS command_context ("
+                          "command_id INTEGER, "
+                          "cwd TEXT, "
+                          "git_branch TEXT, "
+                          "success_count INTEGER DEFAULT 0, "
+                          "last_timestamp INTEGER, "
+                          "PRIMARY KEY (command_id, cwd, git_branch)"
+                          ");");
+                          
+                db_->exec("INSERT INTO command_context (command_id, cwd, git_branch, success_count, last_timestamp) "
+                          "SELECT command_id, cwd, COALESCE(git_branch, ''), SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END), MAX(timestamp) "
+                          "FROM executions GROUP BY command_id, cwd, COALESCE(git_branch, '')");
+                
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_ctx_cwd ON command_context(cwd);");
+                db_->exec("CREATE INDEX IF NOT EXISTS idx_ctx_branch ON command_context(git_branch);");
+
+                db_->exec("ALTER TABLE commands ADD COLUMN success_count INTEGER DEFAULT 0;");
+                db_->exec("UPDATE commands SET success_count = ("
+                          "SELECT SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END) FROM executions WHERE executions.command_id = commands.id"
+                          ");");
+
+                needs_vacuum = true;
+                current_version = 4;
+                db_->exec("PRAGMA user_version = 4");
             }
 
             else {
@@ -124,6 +136,54 @@ void HistoryDB::initSchema() {
         stmt_insert_exec_ = std::make_unique<SQLite::Statement>(*db_, 
             "INSERT INTO executions (command_id, session_id, cwd, git_branch, exit_code, duration_ms, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)");
 
+        stmt_upsert_ctx_ = std::make_unique<SQLite::Statement>(*db_, 
+            "INSERT INTO command_context (command_id, cwd, git_branch, success_count, last_timestamp) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(command_id, cwd, git_branch) DO UPDATE SET "
+            "success_count = success_count + excluded.success_count, "
+            "last_timestamp = MAX(last_timestamp, excluded.last_timestamp)");
+
+        stmt_update_cmd_success_ = std::make_unique<SQLite::Statement>(*db_, 
+            "UPDATE commands SET last_timestamp = ?, success_count = success_count + ? WHERE id = ?");
+
+        stmt_search_global_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "WHERE commands_fts MATCH ? ORDER BY c.last_timestamp DESC LIMIT 5");
+
+        stmt_search_global_ok_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "WHERE commands_fts MATCH ? AND c.success_count > 0 ORDER BY c.last_timestamp DESC LIMIT 5");
+
+        stmt_search_dir_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "JOIN command_context ctx ON ctx.command_id = c.id "
+            "WHERE commands_fts MATCH ? AND ctx.cwd = ? "
+            "GROUP BY c.id ORDER BY MAX(ctx.last_timestamp) DESC LIMIT 5");
+
+        stmt_search_dir_ok_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "JOIN command_context ctx ON ctx.command_id = c.id "
+            "WHERE commands_fts MATCH ? AND ctx.cwd = ? AND ctx.success_count > 0 "
+            "GROUP BY c.id ORDER BY MAX(ctx.last_timestamp) DESC LIMIT 5");
+
+        stmt_search_branch_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "JOIN command_context ctx ON ctx.command_id = c.id "
+            "WHERE commands_fts MATCH ? AND ctx.git_branch = ? "
+            "GROUP BY c.id ORDER BY MAX(ctx.last_timestamp) DESC LIMIT 5");
+
+        stmt_search_branch_ok_ = std::make_unique<SQLite::Statement>(*db_,
+            "SELECT c.id, c.cmd_text FROM commands_fts fts "
+            "JOIN commands c ON fts.rowid = c.id "
+            "JOIN command_context ctx ON ctx.command_id = c.id "
+            "WHERE commands_fts MATCH ? AND ctx.git_branch = ? AND ctx.success_count > 0 "
+            "GROUP BY c.id ORDER BY MAX(ctx.last_timestamp) DESC LIMIT 5");
+
     } catch (std::exception& e) {
         std::cerr << "DB Init Error: " << e.what() << std::endl;
     }
@@ -136,6 +196,11 @@ void HistoryDB::logCommand(const std::string& raw_cmd, const std::string& sessio
     std::string cmd = trim_cmd(raw_cmd);
     if (cmd.empty()) return; 
 
+    if (cmd.starts_with("bsh ") || cmd == "bsh" || 
+        cmd.starts_with("./bsh ") || cmd == "./bsh") {
+        return;
+    }
+
     try {
         stmt_insert_cmd_->reset();
         stmt_insert_cmd_->bind(1, cmd);
@@ -145,31 +210,40 @@ void HistoryDB::logCommand(const std::string& raw_cmd, const std::string& sessio
         stmt_get_id_->bind(1, cmd);
         if (stmt_get_id_->executeStep()) {
             int cmd_id = stmt_get_id_->getColumn(0);
+            std::string safe_branch = branch.empty() ? "" : branch;
+            int is_success = (exit_code == 0) ? 1 : 0;
 
             stmt_insert_exec_->reset();
             stmt_insert_exec_->bind(1, cmd_id);
             stmt_insert_exec_->bind(2, session);
             stmt_insert_exec_->bind(3, cwd);
-            
-            if (branch.empty()) stmt_insert_exec_->bind(4, (char*)nullptr);
-            else stmt_insert_exec_->bind(4, branch);
-            
+            stmt_insert_exec_->bind(4, safe_branch);
             stmt_insert_exec_->bind(5, exit_code);
             stmt_insert_exec_->bind(6, duration);
             stmt_insert_exec_->bind(7, (int64_t)timestamp);
             stmt_insert_exec_->exec();
 
-            SQLite::Statement update_ts(*db_, "UPDATE commands SET last_timestamp = ? WHERE id = ?");
-            update_ts.bind(1, (int64_t)timestamp);
-            update_ts.bind(2, cmd_id);
-            update_ts.exec();
+            // 2. Upsert fast-path context table
+            stmt_upsert_ctx_->reset();
+            stmt_upsert_ctx_->bind(1, cmd_id);
+            stmt_upsert_ctx_->bind(2, cwd);
+            stmt_upsert_ctx_->bind(3, safe_branch);
+            stmt_upsert_ctx_->bind(4, is_success);
+            stmt_upsert_ctx_->bind(5, (int64_t)timestamp);
+            stmt_upsert_ctx_->exec();
+
+            // 3. Update fast-path global table
+            stmt_update_cmd_success_->reset();
+            stmt_update_cmd_success_->bind(1, (int64_t)timestamp);
+            stmt_update_cmd_success_->bind(2, is_success);
+            stmt_update_cmd_success_->bind(3, cmd_id);
+            stmt_update_cmd_success_->exec();
         }
     } catch (std::exception& e) {
         std::cerr << "Log Error: " << e.what() << std::endl;
     }
 }
 
-// src/db.cpp
 
 std::vector<SearchResult> HistoryDB::search(const std::string& query, 
                                             SearchScope scope,
@@ -177,75 +251,35 @@ std::vector<SearchResult> HistoryDB::search(const std::string& query,
                                             bool only_success) {
     std::vector<SearchResult> results;
     try {
-        std::string sql;
+        SQLite::Statement* stmt = nullptr;
+        std::string fts_query = sanitize_fts_query(query);
 
-        // 1. SELECT THE STRATEGY
-        // FAST PATH: Global search (no complex filters)
-        if (scope == SearchScope::GLOBAL && !only_success) {
-            sql = "SELECT c.id, c.cmd_text "
-                  "FROM commands_fts fts "
-                  "JOIN commands c ON fts.rowid = c.id "
-                  "WHERE commands_fts MATCH ? "
-                  "AND c.cmd_text NOT LIKE 'bsh%' "
-                  "AND c.cmd_text NOT LIKE './bsh%' "
-                  "ORDER BY c.last_timestamp DESC LIMIT 5";
-        } 
-        // SLOW PATH: Needs context (Directory/Branch) OR Success Filter
-        else {
-            sql = "SELECT MAX(c.id), c.cmd_text "
-                  "FROM commands_fts fts "
-                  "JOIN commands c ON fts.rowid = c.id "
-                  "JOIN executions e ON e.command_id = c.id "
-                  "WHERE commands_fts MATCH ? "
-                  "AND c.cmd_text NOT LIKE 'bsh%' "
-                  "AND c.cmd_text NOT LIKE './bsh%' ";
-
-            // Context Filters
-            if (scope == SearchScope::DIRECTORY) {
-                sql += " AND e.cwd = ?";
-            }
-            else if (scope == SearchScope::BRANCH) {
-                // Handle "unknown" branches gracefully
-                if (context_val.empty() || context_val == "unknown") {
-                    sql += " AND (e.git_branch IS NULL OR e.git_branch = '')";
-                } else {
-                    sql += " AND e.git_branch = ?";
-                }
-            }
-            
-            // Success Filter
-            // We use 'e.exit_code' from the executions table
-            if (only_success) {
-                sql += " AND e.exit_code = 0";
-            }
-
-            // Grouping and Ordering
-            sql += " GROUP BY c.id ORDER BY MAX(e.timestamp) DESC LIMIT 5";
+        if (scope == SearchScope::GLOBAL) {
+            stmt = only_success ? stmt_search_global_ok_.get() : stmt_search_global_.get();
+            stmt->reset();
+            stmt->bind(1, fts_query);
         }
-
-        // 2. BIND PARAMETERS
-        SQLite::Statement query_stmt(*db_, sql);
-        
-        // Bind 1: The Search Query (Always present)
-        query_stmt.bind(1, sanitize_fts_query(query));
-        
-        // Bind 2: Context (Only if using SLOW PATH with constraints)
-        // We only bind if we are NOT in Global mode (or if Global mode didn't use the fast path? No, Global never binds index 2)
-        if (scope == SearchScope::DIRECTORY) {
-            query_stmt.bind(2, context_val);
+        else if (scope == SearchScope::DIRECTORY) {
+            stmt = only_success ? stmt_search_dir_ok_.get() : stmt_search_dir_.get();
+            stmt->reset();
+            stmt->bind(1, fts_query);
+            stmt->bind(2, context_val);
         }
         else if (scope == SearchScope::BRANCH) {
-             if (!context_val.empty() && context_val != "unknown") {
-                 query_stmt.bind(2, context_val);
-             }
+            stmt = only_success ? stmt_search_branch_ok_.get() : stmt_search_branch_.get();
+            std::string safe_branch = (context_val == "unknown") ? "" : context_val;
+            stmt->reset();
+            stmt->bind(1, fts_query);
+            stmt->bind(2, safe_branch);
         }
 
-        // 3. EXECUTE
-        while (query_stmt.executeStep()) {
-            results.push_back({
-                query_stmt.getColumn(0),
-                query_stmt.getColumn(1)
-            });
+        if (stmt) {
+            while (stmt->executeStep()) {
+                results.push_back({
+                    stmt->getColumn(0),
+                    stmt->getColumn(1)
+                });
+            }
         }
     } catch (std::exception& e) {
         std::cerr << "DB Search Error: " << e.what() << std::endl;

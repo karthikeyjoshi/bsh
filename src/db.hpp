@@ -2,7 +2,7 @@
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <string>
 #include <vector>
-#include <memory> // Required for unique_ptr
+#include <memory> 
 
 enum class SearchScope { GLOBAL, DIRECTORY, BRANCH };
 
@@ -28,15 +28,16 @@ public:
 private:
     std::string db_path_;
     
-    // --- THE FIX: Persistent Objects ---
-    // We use unique_ptr because we need to initialize them in the body of the constructor
-    // after the schema might be created.
     std::unique_ptr<SQLite::Database> db_;
-    
-    // Prepared Statements (Compiled SQL)
     std::unique_ptr<SQLite::Statement> stmt_insert_cmd_;
     std::unique_ptr<SQLite::Statement> stmt_get_id_;
     std::unique_ptr<SQLite::Statement> stmt_insert_exec_;
-    // Note: Search is dynamic (building WHERE clauses), so we might keep that one fresh 
-    // or use a base prepared statement if the query structure is static.
+    std::unique_ptr<SQLite::Statement> stmt_upsert_ctx_;
+    std::unique_ptr<SQLite::Statement> stmt_update_cmd_success_;
+    std::unique_ptr<SQLite::Statement> stmt_search_global_;
+    std::unique_ptr<SQLite::Statement> stmt_search_global_ok_;
+    std::unique_ptr<SQLite::Statement> stmt_search_dir_;
+    std::unique_ptr<SQLite::Statement> stmt_search_dir_ok_;
+    std::unique_ptr<SQLite::Statement> stmt_search_branch_;
+    std::unique_ptr<SQLite::Statement> stmt_search_branch_ok_;
 };
