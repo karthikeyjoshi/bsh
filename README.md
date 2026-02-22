@@ -186,19 +186,46 @@ The `bsh-daemon` is designed to auto-start. If suggestions disappear, the daemon
 
 ### Uninstallation
 
-To cleanly remove BSH:
+To cleanly remove BSH and its background daemon from your system:
 
-1. **Remove Files:**
+**1. Stop the Daemon**
+First, kill the background process so it doesn't lock any files or attempt to respawn:
 
+```bash
+pkill bsh-daemon
+```
+
+**2. Remove the Package / Binaries**
+Depending on how you originally installed BSH, run the corresponding command to remove the files:
+
+* **Homebrew (macOS/Linux):**
+    ```bash
+    brew uninstall bsh
+    # Optional: brew untap karthikeyjoshi/bsh
+    ```
+
+* **Arch Linux (AUR):**
+    ```bash
+    yay -R bsh
+    ```
+
+* **Universal Script / Manual Build:**
+    Remove the installation directory (this will also delete your local BSH SQLite history database):
     ```bash
     rm -rf ~/.bsh
     ```
 
-2. **Clean Configuration:** Open `~/.zshrc` and remove the integration block:
+**3. Clean Configuration**
+Open your `~/.zshrc` and remove the BSH integration block. It will look like one of these depending on your OS:
 
-    ```bash
-    # BSH History Integration (Added by install.sh)
-    source /home/<user>/.bsh/scripts/bsh_init.zsh
-    ```
+```zsh
+# Remove whichever line applies to your system:
+source ~/.bsh/scripts/bsh_init.zsh
+source /usr/share/bsh/bsh_init.zsh
+source $(brew --prefix)/share/bsh/bsh_init.zsh
+```
 
-3. **Reset Session:** Restart your terminal.
+*(Note: If you added the optional arrow-key bindings for cycling through history, be sure to delete those lines as well).*
+
+**4. Reset Session**
+Restart your terminal or run `exec zsh` for the changes to take effect.
