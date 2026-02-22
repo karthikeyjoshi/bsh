@@ -84,7 +84,7 @@ source $(brew --prefix)/share/bsh/bsh_init.zsh
 If you are unsure which version to use, this script detects your OS and installs the appropriate package automatically:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/joshikarthikey/bsh/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/karthikeyjoshi/bsh/main/install.sh | bash
 ```
 
 ---
@@ -118,7 +118,7 @@ brew install cmake ninja libgit2 sqlite openssl python pkg-config
 
 ```bash
 # Clone the repository
-git clone https://github.com/joshikarthikey/bsh.git
+git clone https://github.com/karthikeyjoshi/bsh.git
 cd bsh
 
 # Run the local installer
