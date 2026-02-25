@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(bsh VERSION 0.2.8 LANGUAGES CXX)
+project(bsh VERSION 0.2.9 LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
